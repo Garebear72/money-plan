@@ -220,3 +220,31 @@ test('quick add lists purchases you repeat',()=>{
   const f=C.frequentPurchases(p,D('2026-10-07'),6);
   assert.deepEqual(f.map(x=>[x.note,x.amount,x.count]),[['Corner Cafe',4,3]]);
 });
+
+/* ---------- every number on a card comes from the same place ---------- */
+test('the weekly limit always follows the pay period, whatever the Settings target says',()=>{
+  assert.equal(C.weekData(paid(plan(),1200,5000),D('2026-10-07')).limit,0);   // all saved: nothing to spend, though a target is set
+  const p=paid(plan(),1200,700);p.settings.weeklyLimit=0;
+  assert.equal(C.weekData(p,D('2026-10-07')).limit,200);                     // no target, but 400 left to spend over 2 weeks
+  const q=plan();q.settings.weeklyLimit=0;
+  assert.equal(C.weekData(q,D('2026-10-07')).limit,0);
+});
+test('debts count payments made since the balance date, and a paid-off debt has none left',()=>{
+  const p=plan(),[card,loan]=p.debts;
+  assert.equal(C.debtInfo(p,loan,D('2026-10-27')).made,1);
+  const done=C.debtInfo(p,card,D('2027-07-01'));
+  assert.equal(done.left,0);assert.equal(done.made,9);
+  const l=C.debtInfo(p,loan,D('2027-07-01'));
+  assert.equal(l.made,9);assert.equal(l.left,17);
+});
+test('changing the payday keeps an entered paycheck with its new pay period',()=>{
+  const p=paid(plan(),1300,45);
+  p.settings.paycheck.knownPayday='2026-10-09';
+  p.paychecks=C.alignPaychecks(p);
+  assert.deepEqual(p.paychecks.map(r=>[r.date,r.amount,r.movedToSavings]),[['2026-09-25',1300,45]]);
+  assert.equal(C.payPeriods(p,D('2026-10-07'),1)[0].recorded,true);
+  /* two paychecks that now share one longer period are added together */
+  const q=plan();q.paychecks=[{id:'a',date:'2026-10-02',amount:1200,movedToSavings:120},{id:'b',date:'2026-10-16',amount:1250,movedToSavings:null}];
+  q.settings.paycheck.everyDays=56;
+  assert.deepEqual(C.alignPaychecks(q).map(r=>[r.date,r.amount,r.movedToSavings]),[['2026-10-02',2450,120]]);
+});

@@ -247,3 +247,44 @@ test('paycheck: one form for pay and savings; spending is the rest',async()=>{
   assert.deepEqual(dialogs,[]);
   await context.close();
 });
+
+test('every line on a card agrees with its headline',async()=>{
+  let {page,context,errors}=await open(env);
+  await importFile(page,SAMPLE);
+  /* a paycheck that all goes to savings: a target is set, there's just no spending money */
+  await page.click('#payBanner [data-act=goto-pay]');
+  await page.fill('#payAmt','1200');await page.fill('#paySave','1150');await page.click('[data-act=pay-save]');
+  await tab(page,'today');
+  const week=await txt(page,'#weekCard');
+  assert.match(week,/Over by[\s\S]*\$42\.00[\s\S]*No spending money this week/i);
+  assert.doesNotMatch(week,/No weekly spending target/);
+  /* changing the payday keeps the paycheck you entered, and savings isn't counted twice */
+  await tab(page,'settings');
+  await saveSection(page,'set-paycheck',{'paycheck.knownPayday':'2026-10-09'});
+  await tab(page,'bills');
+  assert.match(await txt(page,'#payCard'),/Paycheck Edit\s*\+\$1,200\.00/);
+  assert.match(await txt(page,'#accountsCard'),/Savings on Oct 7\s*\$1,550\.00/);
+  assert.equal(await page.locator('#payBanner').innerText(),'');
+  /* with no warning line, the forecast is checked against $0 and the words match the colour */
+  await tab(page,'settings');
+  await saveSection(page,'set-general',{warnBelow:0});
+  await saveSection(page,'set-accounts',{'checking.balance':-650});
+  await tab(page,'bills');
+  assert.match(await txt(page,'#accountsCard'),/Could drop below \$0\./);
+  assert.equal(await page.locator('#accountsCard .status.bad').count(),1);
+  await tab(page,'today');
+  assert.match(await txt(page,'#cashWarn'),/below \$0\. See Bills/);
+  assert.deepEqual(errors,[]);
+  await context.close();
+
+  /* months later: a debt whose payments are all made shows no leftover balance */
+  ({page,context,errors}=await open(env,{time:'2027-07-01T12:00:00'}));
+  await importFile(page,SAMPLE);
+  await tab(page,'debts');
+  const card=await txt(page,'#debtCards .card:has-text("Store card")');
+  assert.match(card,/Paid off[\s\S]*Balance\s*\$0\.00/i);
+  assert.equal(await page.locator('#debtCards .card:has-text("Store card") .kv',{hasText:/Paid off/i}).count(),0);   // only the pill says it
+  assert.match(await txt(page,'#debtCards .card:has-text("Personal loan")'),/17 payments left[\s\S]*Balance on Oct 1\s*\$3,000\.00\s*9 payments of \$125\.00 have gone out since then/);
+  assert.deepEqual(errors,[]);
+  await context.close();
+});

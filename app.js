@@ -162,10 +162,17 @@ function deepMerge(t,s){Object.keys(s).forEach(function(k){if(isObj(s[k])&&isObj
 function renderWeek(){
   var t=new Date(),w=C.weekData(plan,t),lim=w.limit,el=$('#weekCard');
   var range=esc(fMD.format(w.ws))+' to '+esc(fMD.format(w.we));
-  if(!(lim>0)){
+  /* the limit comes from the pay periods (same as the Paycheck card), not straight from the Settings target */
+  if(!(lim>0)&&!(plan.settings.weeklyLimit>0)){
     el.className='card';
     el.innerHTML='<h2>Spent this week · '+range+'</h2><div class="big">'+money(w.spent)+'</div>'+
       '<span class="status">No weekly spending target set. Add one in Settings.</span>';
+    return;
+  }
+  if(!(lim>0)){
+    el.className='card'+(w.spent>0?' state-bad':'');
+    el.innerHTML='<h2>'+(w.spent>0?'Over by':'Left this week')+' · '+range+'</h2><div class="big">'+money(w.spent)+'</div>'+
+      '<span class="status'+(w.spent>0?' bad':'')+'">No spending money this week. After bills and savings, nothing is left from this paycheck. See the Paycheck card on Bills.</span>';
     return;
   }
   var pct=w.spent/lim,expected=lim*(8-w.daysLeft)/7,state='',msg='';
@@ -186,10 +193,15 @@ function renderWeek(){
       '<div class="stat"><b>'+money(w.today)+'</b><span>spent today</span></div>'+
     '</div>';
 }
+/* one rule for the Today banner and the Accounts card: below the warning line, or below $0 when none is set */
+function cashLine(p){
+  var w=plan.settings.warnBelow;
+  return {below:p.low<w,name:w?'your '+money(w)+' warning line':'$0'};
+}
 function renderCashWarn(){
-  var s=plan.settings,p=C.cashProjection(plan,new Date(),45),el=$('#cashWarn');
-  if(p&&s.warnBelow&&p.low<s.warnBelow){
-    el.innerHTML='<div class="banner'+(p.low<0?' bad':'')+'">Checking could drop to '+money(p.low)+' on '+esc(wd(p.lowDate))+', below your '+money(s.warnBelow)+' warning line. See Bills for details.</div>';
+  var p=C.cashProjection(plan,new Date(),45),el=$('#cashWarn'),c=p&&cashLine(p);
+  if(c&&c.below){
+    el.innerHTML='<div class="banner'+(p.low<0?' bad':'')+'">Checking could drop to '+money(p.low)+' on '+esc(wd(p.lowDate))+', below '+c.name+'. See Bills for details.</div>';
   }else el.innerHTML='';
 }
 function purchaseEditor(p){
@@ -405,8 +417,8 @@ function renderBills(){
   if(p){
     if(s.checking.asOf<ds(t))h+='<div class="kv"><span>Checking today (estimate)</span><b>'+money(p.now)+'</b></div>';
     h+='<div class="kv"><span>Lowest point, next 45 days</span><b>'+money(p.low)+' · '+esc(fMD.format(p.lowDate))+'</b></div>';
-    var low=s.warnBelow&&p.low<s.warnBelow;
-    h+='<span class="status'+(p.low<0?' bad':low?' warn':'')+'">'+(low?'Could drop below your '+money(s.warnBelow)+' warning line. Hold off on extra spending until '+esc(fMD.format(p.lowDate))+' has passed.':'Stays above your warning line through '+esc(fMD.format(end))+'.')+'</span>';
+    var c=cashLine(p);
+    h+='<span class="status'+(c.below?(p.low<0?' bad':' warn'):'')+'">'+(c.below?'Could drop below '+c.name+'. Hold off on extra spending until '+esc(fMD.format(p.lowDate))+' has passed.':'Stays above '+c.name+' through '+esc(fMD.format(end))+'.')+'</span>';
   }else{
     h+='<p class="muted small" style="margin-top:10px">Add your checking balance in Settings to see where it is heading.</p>';
   }
@@ -439,11 +451,16 @@ function renderDebts(){
     var d=i.debt,b=i.bill;
     var pill=i.paused?'Payments paused':i.left==null?'Ongoing':i.left===0?'Paid off':plural(i.left,'payment')+' left';
     var h='<div class="card debt"><div class="head"><h3>'+esc(d.name)+'</h3><span class="pill">'+esc(pill)+'</span></div>';
-    h+='<div class="kv"><span>Balance'+(d.balanceAsOf?' on '+esc(fMD.format(pd(d.balanceAsOf))):'')+'</span><b>'+money(d.balance)+'</b></div>';
+    /* the pill counts payments down from the balance date, so the balance line must not contradict it */
+    if(i.left===0)h+='<div class="kv"><span>Balance</span><b>'+money(0)+'</b></div>'+
+      '<p class="muted small">All the scheduled payments have gone out. If anything is still owed, update the balance and payments left in Settings.</p>';
+    else{
+      h+='<div class="kv"><span>Balance'+(d.balanceAsOf?' on '+esc(fMD.format(pd(d.balanceAsOf))):'')+'</span><b>'+money(d.balance)+'</b></div>';
+      if(i.made>0)h+='<p class="muted small">'+plural(i.made,'payment')+' of '+money(b.amount)+' '+(i.made===1?'has':'have')+' gone out since then. Update the balance in Settings to see what\'s left today.</p>';
+    }
     h+='<div class="kv"><span>Payment</span><b>'+(b?money(b.amount)+' on the '+ordinal(b.day):'Not linked to a bill')+'</b></div>';
-    if(i.left===0)h+='<div class="kv"><span>Paid off</span><b>Done</b></div>';
-    else if(i.last||d.projectedPayoff)h+='<div class="kv"><span>Paid off</span><b>'+esc(i.last?fMY.format(i.last):monthish(d.projectedPayoff))+'</b></div>';
-    if(d.projectedPayoffWithExtra)h+='<div class="kv"><span>Paid off with extra payments</span><b>'+esc(monthish(d.projectedPayoffWithExtra))+'</b></div>';
+    if(i.left!==0&&(i.last||d.projectedPayoff))h+='<div class="kv"><span>Paid off</span><b>'+esc(i.last?fMY.format(i.last):monthish(d.projectedPayoff))+'</b></div>';
+    if(i.left!==0&&d.projectedPayoffWithExtra)h+='<div class="kv"><span>Paid off with extra payments</span><b>'+esc(monthish(d.projectedPayoffWithExtra))+'</b></div>';
     if(d.apr!=null)h+='<div class="kv"><span>APR</span><b>'+esc(String(round2(d.apr*10000)/100))+'%</b></div>';
     if(d.note)h+='<p class="muted small">'+esc(d.note)+'</p>';
     h+='<div class="btns"><button class="btn small" type="button" data-act="goto-edit" data-kind="debt" data-id="'+esc(d.id)+'">Edit</button></div></div>';
@@ -731,7 +748,11 @@ function saveSection(id){
   var raw=deepMerge(C.exportPlan(plan).settings,form),ctx=new C.Ctx();
   var s=C.normSettings(ctx,raw);
   if(ctx.errors.length){showErrs(root,ctx.errors);return;}
-  commit(function(p){p.settings=s;},'Settings saved');
+  var o=plan.settings.paycheck,moved=s.paycheck.knownPayday!==o.knownPayday||s.paycheck.everyDays!==o.everyDays;
+  commit(function(p){
+    p.settings=s;
+    if(moved)p.paychecks=C.alignPaychecks(p);   /* keep entered paychecks with their new pay period */
+  },'Settings saved');
 }
 
 /* ---------- events ---------- */

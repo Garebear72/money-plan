@@ -437,7 +437,8 @@ function weekData(plan,today){
     if(p.date===t0)todaySpent+=p.amount;
   });
   spent=round2(spent);
-  var lim=plan.settings.weeklyLimit>0?weekLimit(plan,w.ws,w.we):0;
+  /* always from the pay periods, so it matches the Paycheck card even when no weekly target is set */
+  var lim=weekLimit(plan,w.ws,w.we);
   return {ws:w.ws,we:w.we,spent:spent,today:round2(todaySpent),limit:lim,target:plan.settings.weeklyLimit,
     left:round2(lim-spent),daysLeft:dayDiff(t,w.we)+1};
 }
@@ -466,17 +467,18 @@ function findBill(plan,name){
 }
 function debtInfo(plan,debt,today){
   var t=sod(today),bill=findBill(plan,debt.billName),hol=holidaySet(plan);
-  var info={debt:debt,bill:bill,left:debt.paymentsLeft,next:null,last:null,monthly:0,paused:false,linked:!!bill};
+  var info={debt:debt,bill:bill,left:debt.paymentsLeft,next:null,last:null,monthly:0,paused:false,linked:!!bill,made:0};
   if(!bill)return info;
   if(!bill.active){info.paused=true;return info;}
+  /* payments that went out after the balance was written down, so the card can say the balance is older than that */
+  var since=debt.balanceAsOf?pd(debt.balanceAsOf):t;
+  info.made=since<t?billOccurrences(plan,bill,since,addDays(t,-1),hol).length:0;
   var occ;
   if(bill.end){
     occ=billOccurrences(plan,bill,t,pd(bill.end),hol);
     info.left=occ.length;
   }else if(debt.paymentsLeft!=null){
-    var since=debt.balanceAsOf?pd(debt.balanceAsOf):t;
-    var made=since<t?billOccurrences(plan,bill,since,addDays(t,-1),hol).length:0;
-    info.left=Math.max(0,debt.paymentsLeft-made);
+    info.left=Math.max(0,debt.paymentsLeft-info.made);
     occ=info.left?billOccurrences(plan,bill,t,new Date(t.getFullYear(),t.getMonth()+info.left+2,1),hol).slice(0,info.left):[];
   }else{
     occ=billOccurrences(plan,bill,t,new Date(t.getFullYear(),t.getMonth()+2,1),hol).slice(0,1);
@@ -553,6 +555,19 @@ function periodChain(plan,first,count,today){
     p.short=act.free<0?round2(-act.free):0;
   }
   return ps;
+}
+/* After the payday or pay frequency changes, move each entered paycheck to the start of the new pay period
+   it falls in, so it isn't lost (and its savings isn't counted twice when entered again). Two that land in
+   the same period are added together. */
+function alignPaychecks(plan){
+  var by={},out=[];
+  plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).forEach(function(r){
+    var d=ds(periodStart(plan,pd(r.date))),x=by[d];
+    if(!x){x=by[d]={id:r.id,date:d,amount:r.amount,movedToSavings:r.movedToSavings};out.push(x);return;}
+    x.amount=round2(x.amount+r.amount);
+    if(r.movedToSavings!=null)x.movedToSavings=round2((x.movedToSavings||0)+r.movedToSavings);
+  });
+  return out;
 }
 /* the current period and the next count-1, with carry-over worked out from the period before */
 function payPeriods(plan,today,count){
@@ -738,7 +753,7 @@ return {
   normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,
   paydays:paydays,billOccurrences:billOccurrences,rentOccurrences:rentOccurrences,billsBetween:billsBetween,totalBetween:totalBetween,
   weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection,
-  payPeriods:payPeriods,periodStart:periodStart,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
+  payPeriods:payPeriods,periodStart:periodStart,alignPaychecks:alignPaychecks,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
   matchBankTxns:matchBankTxns,frequentPurchases:frequentPurchases
 };
 });
