@@ -178,10 +178,3 @@ details.sub .kv b{font-size:13px}
 .paybox{margin:10px 0 12px;padding:12px;border-radius:12px;background:var(--surface2);border:1px solid var(--accent)}
 .paybox input{background:var(--surface)}
 .link{border:0;background:none;color:var(--accent);font:inherit;font-size:13px;font-weight:600;padding:0 4px;cursor:pointer;text-decoration:underline}
-.split{margin-top:12px}
-.split input[type=range]{width:100%;accent-color:var(--accent);height:32px}
-.splitvals{display:flex;justify-content:space-between;gap:12px;margin-top:4px}
-.splitvals b{display:block;font:600 20px var(--font-num)}
-.splitvals span{font-size:12px;color:var(--muted)}
-.splitvals .r{text-align:right}
-.split .btns{margin-top:8px}

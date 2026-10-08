@@ -83,30 +83,16 @@
     </details>
 
     <div class="card">
-      <h2>Next up</h2>
-      <ul class="list" id="nextUp"></ul>
-    </div>
-
-    <div class="card">
       <h2>Recent purchases</h2>
       <ul class="list" id="recent"></ul>
       <div id="recentMore"></div>
     </div>
 
-    <details class="card">
-      <summary>Weekly spending target</summary>
-      <div class="row">
-        <label class="fld"><span id="weeklyLabel">Dollars per week</span><span class="money-in"><input id="weekly" type="text" inputmode="decimal"></span></label>
-        <button class="btn" id="saveWeekly" type="button">Save</button>
-      </div>
-      <p class="muted small" style="margin-top:10px">Your plan for a usual paycheck. When you enter a real paycheck, this week's limit grows or shrinks with it.</p>
-    </details>
   </section>
 
   <!-- BILLS -->
   <section id="tab-bills" class="tab" aria-label="Bills" hidden>
     <div id="paydayCard"></div>
-    <div class="card" id="billsSummary"></div>
     <div class="card" id="accountsCard"></div>
     <div class="card"><div id="billsList"></div></div>
     <p class="muted small">Weekend and holiday dates can post a business day later. <a href="#" data-act="goto" data-tab="settings" data-focus="set-bills">Edit bills in Settings.</a></p>
@@ -116,10 +102,6 @@
   <section id="tab-debts" class="tab" aria-label="Debts" hidden>
     <div class="card" id="debtSummary"></div>
     <div id="debtCards"></div>
-    <div class="card">
-      <h2>Payoff timeline</h2>
-      <ul class="list" id="timeline"></ul>
-    </div>
   </section>
 
   <!-- PARTNER -->
@@ -147,14 +129,6 @@
         <button class="btn" id="saveSetBal" type="button">Set balance</button>
       </div>
       <p class="muted small" style="margin-top:10px">This adds a "Balance adjustment" entry dated today, so the log still adds up.</p>
-    </details>
-    <details class="card">
-      <summary id="minSummary">Monthly payment</summary>
-      <div class="row">
-        <label class="fld"><span>Dollars per month</span><span class="money-in"><input id="cmin" type="text" inputmode="decimal"></span></label>
-        <button class="btn" id="saveMin" type="button">Save</button>
-      </div>
-      <p class="muted small" style="margin-top:10px">This drives the payoff estimate above.</p>
     </details>
   </section>
 

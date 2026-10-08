@@ -19,13 +19,9 @@ Today → **Import purchases from your bank** reads a bank activity CSV on the d
 
 ## Paychecks
 
-On payday, enter what you actually got paid (Today shows a reminder, and the Bills tab has the box). The app then:
+On payday, the Bills tab asks two things: **what you got paid** and **what you're moving to savings**. Bills due before the next payday come out first, and whatever you don't save is your spending money for the pay period. Today's weekly limit follows from that, and a week that straddles a payday blends both paychecks.
 
-1. Takes out the bills and rent due before the next payday.
-2. Holds some back in checking if a later pay period wouldn't cover its own bills and spending.
-3. Splits the rest between **spending** and **savings**. The suggested split is your usual plan (the weekly spending target, at least the minimum saving) scaled to the real paycheck, so a bigger check grows both and a smaller one shrinks both. Drag the slider to choose a different split.
-
-Today's weekly limit follows the split; a week that straddles two paydays blends both. **I moved $X to savings** adds that amount to your savings balance. Until you enter a paycheck, the app plans with your usual take-home amount and labels it "expected".
+The savings box starts with a suggestion: your weekly spending target scaled to the real paycheck, with at least your minimum saving. So a bigger check suggests more of both. If a later pay period is tight, some money is kept back in checking for its bills. Until you enter a paycheck, the app plans with your usual take-home amount and labels it "expected".
 
 ## Plan file format
 
@@ -39,7 +35,7 @@ See [`sample-plan.json`](sample-plan.json) for a complete example. All numbers i
 | `debts[]` | `name`, `billName` (links to a bill), `balance`, `balanceAsOf`, `paymentsLeft`, `apr` (0.2 = 20%), `projectedPayoff`, `projectedPayoffWithExtra` (both optional, `"YYYY-MM"`), `note` |
 | `partnerLedger[]` | `type` (`charge` or `payment`), `amount`, `date`, `note` |
 | `purchases[]` | `amount`, `note`, `category`, `date` |
-| `paychecks[]` (optional) | `date` (the scheduled payday), `amount` received, `toSpending` (only if you chose your own split), `movedToSavings` (only once you've moved it) |
+| `paychecks[]` (optional) | `date` (the scheduled payday), `amount` received, `movedToSavings` |
 
 Dates are `YYYY-MM-DD`. Unknown fields are ignored, missing optional fields get defaults, and mistakes are reported in plain language with the item and field named.
 

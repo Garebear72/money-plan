@@ -218,7 +218,6 @@ function normPaycheck(ctx,r,where){
     id:keepId(r.id),
     date:readDate(ctx,r,'date',where,{required:true}),
     amount:readNum(ctx,r,'amount',where,{required:true,positive:true,money:true,example:'1200'}),
-    toSpending:readNum(ctx,r,'toSpending',where,{def:null,min:0,money:true,example:'320'}),
     movedToSavings:readNum(ctx,r,'movedToSavings',where,{def:null,min:0,money:true,example:'50'})
   };
 }
@@ -348,7 +347,6 @@ function exportPlan(plan){
   /* optional: only written once you've recorded a paycheck, so older files round-trip unchanged */
   if(plan.paychecks&&plan.paychecks.length)out.paychecks=plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).map(function(r){
     var o={date:r.date,amount:r.amount};
-    if(r.toSpending!=null)o.toSpending=r.toSpending;
     if(r.movedToSavings!=null)o.movedToSavings=r.movedToSavings;
     return o;
   });
@@ -515,9 +513,9 @@ function cashProjection(plan,today,days){
 /* ---------- per-paycheck plan ---------- */
 /* Each pay period runs from a payday to the day before the next one. A paycheck pays the bills due in its
    period, may hold some back for a later period that would otherwise come up short, and the rest is
-   "yours to split" between spending and savings. The default split is the usual plan (weekly target for
-   spending, the rest saved, at least the minimum saving) scaled to the real paycheck, so a bigger check
-   grows both and a smaller one shrinks both. A split you pick yourself is stored on the paycheck record. */
+   split between savings and spending. Until you say what you moved to savings, the suggestion is the usual
+   plan (weekly target for spending, the rest saved, at least the minimum saving) scaled to the real
+   paycheck, so a bigger check grows both and a smaller one shrinks both. Whatever isn't saved is spending. */
 function periodStart(plan,d){var step=plan.settings.paycheck.everyDays;d=sod(d);return paydays(plan,addDays(d,-step+1),d)[0];}
 function paycheckRecord(plan,dateStr){
   for(var i=0;i<plan.paychecks.length;i++)if(plan.paychecks[i].date===dateStr)return plan.paychecks[i];
@@ -547,9 +545,10 @@ function periodChain(plan,first,count,today){
     if(e.free>0)sug=act.free*Math.max(0,Math.min(S,e.free-minSave))/e.free;
     else sug=Math.max(0,Math.min(S,act.free-minSave));
     p.suggested=round2(Math.max(0,Math.min(sug,act.free)));
-    p.custom=!!(p.rec&&p.rec.toSpending!=null);
-    p.spending=p.custom?round2(Math.max(0,Math.min(p.rec.toSpending,Math.max(0,act.free)))):p.suggested;
-    p.savings=round2(Math.max(0,act.free-p.spending));
+    p.suggestedSavings=round2(Math.max(0,act.free-p.suggested));
+    p.saved=!!(p.rec&&p.rec.movedToSavings!=null);
+    p.savings=p.saved?p.rec.movedToSavings:p.suggestedSavings;
+    p.spending=p.saved?round2(Math.max(0,act.free-p.savings)):p.suggested;
     p.short=act.free<0?round2(-act.free):0;
   }
   return ps;

@@ -109,7 +109,7 @@ test('warnings for broken debt links and percent-style APR',()=>{
 
 /* ---------- paycheck plan ---------- */
 const periods=(p,n=3)=>C.payPeriods(p,D('2026-10-07'),n).map(x=>[C.ds(x.start),x.pay,x.carryIn,x.keepForNext,x.free,x.spending,x.savings,x.short]);
-const paid=(p,amount,toSpending=null)=>{p.paychecks=[{id:'a',date:'2026-10-02',amount,toSpending,movedToSavings:null}];return p;};
+const paid=(p,amount,moved=null)=>{p.paychecks=[{id:'a',date:'2026-10-02',amount,movedToSavings:moved}];return p;};
 test('pay periods: bills first, then the rest split between spending and savings',()=>{
   assert.deepEqual(periods(plan(),4),[
     // start, pay, carry-in, held back, yours to split, spend (2 weeks at 140), save, short
@@ -129,9 +129,10 @@ test('a real paycheck scales spending and savings in proportion, and moves the w
   assert.equal(C.weekData(p,D('2026-10-07')).limit,63.64);
   assert.equal(C.weekData(plan(),D('2026-10-07')).limit,140);   // no paycheck entered: the usual target
 });
-test('a split you choose is kept, but never more than is available',()=>{
-  assert.deepEqual(periods(paid(plan(),1200,400))[0].slice(4,7),[1100,400,700]);
-  assert.deepEqual(periods(paid(plan(),1200,5000))[0].slice(4,7),[1100,1100,0]);
+test('what you move to savings sets the spending money: the rest of the paycheck',()=>{
+  assert.deepEqual(periods(paid(plan(),1200,400))[0].slice(4,7),[1100,700,400]);
+  assert.deepEqual(periods(paid(plan(),1200,0))[0].slice(4,7),[1100,1100,0]);
+  assert.deepEqual(periods(paid(plan(),1200,5000))[0].slice(4,7),[1100,0,5000]);   // saved more than was left
 });
 test('a tight period ahead makes the paycheck before it hold money back',()=>{
   const p=plan();p.settings.paycheck.amount=800;
@@ -146,13 +147,13 @@ test('the weekly limit blends the two pay periods a week straddles',()=>{
   const p=plan();p.settings.paycheck.amount=800;
   /* Oct 12-18: 4 days of the Oct 2 period (280/14 a day) and 3 of Oct 16 (280/14) */
   assert.equal(C.weekLimit(p,D('2026-10-12'),D('2026-10-18')),140);
-  paid(p,800,140);   /* spend only 140 of the Oct 2 paycheck: 10 a day for those 4 days */
+  paid(p,800,375);   /* save 375 of the 515 left: 140 to spend, 10 a day for those 4 days */
   assert.equal(C.weekLimit(p,D('2026-10-12'),D('2026-10-18')),100);
 });
 test('paychecks round-trip through export, and files without them are unchanged',()=>{
-  const p=paid(plan(),1300,300);p.paychecks[0].movedToSavings=50;
+  const p=paid(plan(),1300,50);
   const out=C.exportPlan(p);
-  assert.deepEqual(out.paychecks,[{date:'2026-10-02',amount:1300,toSpending:300,movedToSavings:50}]);
+  assert.deepEqual(out.paychecks,[{date:'2026-10-02',amount:1300,movedToSavings:50}]);
   assert.deepEqual(C.exportPlan(C.parsePlan(JSON.stringify(out)).plan),out);
   assert.equal('paychecks' in C.exportPlan(plan()),false);
   const bad=JSON.parse(SAMPLE);bad.paychecks=[{date:'2026-10-02',amount:'lots'}];
