@@ -48,7 +48,7 @@ test('import via file picker; every tab shows the expected numbers',async()=>{
   await tab(page,'debts');
   assert.match(await txt(page,'#debtSummary'),/\$155\.00/);
   await tab(page,'partner');
-  assert.match(await txt(page,'#parCard'),/You owe Partner[\s\S]*\$285\.00[\s\S]*\$385\.00\s*after Nov 20/i);
+  assert.match(await txt(page,'#parCard'),/You owe Partner\s*\$285\.00\s*At \$25\.00 a month, that's paid off in about 12 months[\s\S]*Plus \$100\.00 scheduled by Nov 20, making \$385\.00/i);
   await page.reload();
   assert.ok(await page.locator('#tab-partner').isVisible(),'data and tab survive a reload');
   assert.deepEqual(errors,[]);
@@ -122,6 +122,8 @@ test('purchases, bills, debts and the partner log are editable',async()=>{
   await page.fill('#setBal','500');await page.click('#saveSetBal');
   assert.match(await txt(page,'#parCard'),/\$500\.00/);
   assert.match(await txt(page,'#parLog'),/Balance adjustment[\s\S]*\+\$265\.00/);
+  /* the payoff estimate follows the new balance, and a correction isn't counted as money paid */
+  assert.match(await txt(page,'#parCard'),/that's paid off in about 20 months[\s\S]*making \$600\.00[\s\S]*You've paid Partner \$75\.00 so far/);
   assert.deepEqual(dialogs,[]);
   await context.close();
 });

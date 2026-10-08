@@ -466,21 +466,19 @@ function renderPartner(){
   $('#tab-partner').setAttribute('aria-label',L);
   $('#cPaid').textContent='I paid '+L;
   $('#cCharge').textContent=L+' covered more';
-  var pct=c.charged>0?Math.min(100,Math.round(c.paid/c.charged*100)):0;
+  /* everything on this card follows "what you owe now"; scheduled entries are shown on their own line */
+  var months=function(amt){var m=C.monthsToRepay(amt,per,t);return 'about '+plural(m.n,'month')+' (around '+fMY.format(m.end)+')';};
   var h='<h2>You owe '+esc(L)+'</h2><div class="big">'+money(Math.max(0,c.bal))+'</div>';
   if(c.bal<0)h+='<p class="small" style="margin:-6px 0 10px">'+esc(L)+' owes you '+money(-c.bal)+'.</p>';
-  h+='<div class="bar" role="img" aria-label="'+pct+' percent repaid"><i style="--w:'+pct+'%"></i></div>';
-  h+='<div class="stats two">'+
-     '<div class="stat"><b>'+money(c.paid)+'</b><span>repaid so far</span></div>'+
-     '<div class="stat"><b>'+money(c.total)+'</b><span>'+(c.sched?'after '+esc(fMD.format(pd(c.lastScheduled))):'total to repay')+'</span></div></div>';
-  if(c.total>0&&per>0){
-    var m=C.monthsToRepay(c.total,per,t),m2=C.monthsToRepay(c.total,per*2,t);
-    h+='<span class="status">At '+money(per)+' a month: about '+plural(m.n,'month')+', around '+esc(fMY.format(m.end))+'. At '+money(per*2)+' a month: '+plural(m2.n,'month')+'.</span>';
-  }else if(c.total>0){
-    h+='<span class="status warn">Set a monthly payment in Settings to see a payoff estimate.</span>';
-  }else{
-    h+='<span class="status">'+(plan.partnerLedger.length?'Paid off. Nothing left to repay.':'Nothing logged yet. Add what '+esc(L)+' covered below.')+'</span>';
+  if(c.bal>0&&per>0)h+='<span class="status">At '+money(per)+' a month, that\'s paid off in '+esc(months(c.bal))+'.</span>';
+  else if(c.bal>0)h+='<span class="status warn">Set a monthly payment in Settings to see when it\'s paid off.</span>';
+  else if(!c.sched)h+='<span class="status">'+(plan.partnerLedger.length?'Paid off. Nothing left to repay.':'Nothing logged yet. Add what '+esc(L)+' covered below.')+'</span>';
+  if(c.sched){
+    var by=esc(fMD.format(pd(c.lastScheduled)));
+    h+='<p class="small" style="margin-top:12px">'+(c.sched>0?'Plus '+money(c.sched)+' scheduled by '+by:'Minus '+money(-c.sched)+' in payments scheduled by '+by)+
+      ', making '+money(Math.max(0,c.total))+(c.total>0&&per>0?': '+esc(months(c.total))+' at '+money(per)+' a month.':'.')+'</p>';
   }
+  if(c.paid>0)h+='<p class="muted small" style="margin-top:8px">You\'ve paid '+esc(L)+' '+money(c.paid)+' so far.</p>';
   $('#parCard').innerHTML=h;
   var t0=ds(t);
   var list=plan.partnerLedger.slice().sort(function(a,b){return (b.date>a.date?1:b.date<a.date?-1:0)||(b.ts-a.ts);});
@@ -770,7 +768,7 @@ $('#saveSetBal').addEventListener('click',function(){
   var v=parseAmount($('#setBal').value,true);if(v==null){toast('Enter what you owe right now, for example 250.00.');return;}
   var cur=C.partnerData(plan,new Date()).bal,diff=round2(v-cur);
   if(Math.abs(diff)<0.005){toast('The balance is already '+money(v)+'.');return;}
-  var rec={id:C.uid(),type:diff>0?'charge':'payment',amount:Math.abs(diff),date:ds(new Date()),note:'Balance adjustment',ts:Date.now()};
+  var rec={id:C.uid(),type:diff>0?'charge':'payment',amount:Math.abs(diff),date:ds(new Date()),note:C.ADJUSTMENT,ts:Date.now()};
   if(commit(function(p){p.partnerLedger.push(rec);},'Balance set to '+money(v),true))$('#setBal').value='';
 });
 

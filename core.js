@@ -6,7 +6,7 @@
 })(typeof self!=='undefined'?self:this,function(){
 'use strict';
 
-var APP='money-plan',VERSION=1;
+var APP='money-plan',VERSION=1,ADJUSTMENT='Balance adjustment';
 var KINDS=['subscription','debt','insurance','other'];
 var KIND_ALIASES={sub:'subscription',subscriptions:'subscription',streaming:'subscription',ins:'insurance',loan:'debt'};
 var WEEKDAYS=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
@@ -448,6 +448,7 @@ function partnerData(plan,today){
   plan.partnerLedger.forEach(function(e){
     var sign=e.type==='payment'?-1:1,future=e.date>t0;
     if(future){sched+=sign*e.amount;if(!lastSched||e.date>lastSched)lastSched=e.date;}else bal+=sign*e.amount;
+    if(e.note===ADJUSTMENT)return;   /* a correction, not money that changed hands */
     if(e.type==='payment'){if(!future)paid+=e.amount;}else charged+=e.amount;
   });
   return {bal:round2(bal),sched:round2(sched),total:round2(bal+sched),paid:round2(paid),charged:round2(charged),lastScheduled:lastSched};
@@ -731,7 +732,7 @@ var fmtMoney=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
 function money(n){return fmtMoney.format(round2(n));}
 
 return {
-  APP:APP,VERSION:VERSION,KINDS:KINDS,WEEKDAYS:WEEKDAYS,
+  APP:APP,VERSION:VERSION,ADJUSTMENT:ADJUSTMENT,KINDS:KINDS,WEEKDAYS:WEEKDAYS,
   ds:ds,pd:pd,sod:sod,addDays:addDays,dayDiff:dayDiff,round2:round2,isDateStr:isDateStr,isMonthStr:isMonthStr,uid:uid,clone:clone,money:money,
   Ctx:Ctx,parsePlan:parsePlan,normalizePlan:normalizePlan,exportPlan:exportPlan,
   normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,

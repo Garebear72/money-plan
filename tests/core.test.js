@@ -43,6 +43,10 @@ test('paycheck amount does not change bill totals',()=>{
 test('partner balance now and after scheduled entries',()=>{
   const d=C.partnerData(plan(),D('2026-10-07'));
   assert.equal(d.bal,285);assert.equal(d.total,385);assert.equal(d.lastScheduled,'2026-11-20');
+  assert.equal(d.paid,25);
+  const p=plan();p.partnerLedger.push({id:'adj',type:'payment',amount:85,date:'2026-10-07',note:C.ADJUSTMENT,ts:9});
+  const a=C.partnerData(p,D('2026-10-07'));
+  assert.equal(a.bal,200);assert.equal(a.paid,25);   // a balance correction changes what you owe, not what you've paid
 });
 
 test('debts: payments left from the bill end date or from paymentsLeft',()=>{
