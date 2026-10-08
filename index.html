@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Money Plan</title>
+<meta name="description" content="A private budgeting planner. Your data stays on this device.">
+<meta name="theme-color" content="#E8EEEC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0C1311" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Money Plan">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preload" href="fonts/instrument-sans-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/ibm-plex-mono-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+<script src="core.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div>
+      <h1>Money Plan</h1>
+      <p class="muted small" id="today"></p>
+    </div>
+    <span class="pill" id="sync">Loading</span>
+  </header>
+  <div class="banner" id="banner" hidden></div>
+  <noscript><div class="banner">Money Plan needs JavaScript turned on.</div></noscript>
+
+  <!-- FIRST RUN: shown until a plan is imported -->
+  <section id="tab-welcome" class="tab" aria-label="Get started" hidden>
+    <div class="card">
+      <h2>Get started</h2>
+      <h3>Load your plan to begin</h3>
+      <p class="small" style="margin-top:8px">Money Plan works from one plan file: your paycheck, bills, rent, debts and so on, written in JSON. Load it once and everything is saved <b>only on this device</b>. Nothing is sent anywhere. The app makes no network requests at all.</p>
+      <ol class="steps small">
+        <li>Choose your plan file below, or open it in another app, copy all of it, and paste it into the box.</li>
+        <li>Tap <b>Validate</b> to check it. You'll see a summary of what will be loaded.</li>
+        <li>Tap <b>Import</b>. You can change everything later in Settings.</li>
+      </ol>
+      <p class="muted small" style="margin-top:10px">Don't have a plan file yet? Look at <a href="sample-plan.json" target="_blank" rel="noopener">the example plan</a> for the format. It contains made-up numbers.</p>
+    </div>
+    <div class="card" id="welcomeImport"></div>
+  </section>
+
+  <!-- TODAY -->
+  <section id="tab-today" class="tab" aria-label="Today" hidden>
+    <div class="card" id="weekCard"></div>
+    <div id="cashWarn"></div>
+
+    <form class="card" id="addForm" autocomplete="off">
+      <h2>Log a purchase</h2>
+      <div class="row">
+        <label class="fld" style="flex-basis:120px"><span>Amount</span><span class="money-in"><input id="pAmt" type="text" inputmode="decimal" placeholder="0.00" aria-label="Amount in dollars"></span></label>
+        <label class="fld" style="flex-basis:170px"><span>What for</span><input id="pNote" type="text" maxlength="60" placeholder="Optional"></label>
+      </div>
+      <div class="chips" id="cats" role="group" aria-label="Category"></div>
+      <div class="row">
+        <label class="fld" style="flex-basis:152px"><span>Date</span><input id="pDate" type="date"></label>
+        <button class="btn primary" type="submit" style="flex:1 1 120px">Add purchase</button>
+      </div>
+    </form>
+
+    <div class="card">
+      <h2>Next up</h2>
+      <ul class="list" id="nextUp"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Recent purchases</h2>
+      <ul class="list" id="recent"></ul>
+      <div id="recentMore"></div>
+    </div>
+
+    <details class="card">
+      <summary>Weekly spending limit</summary>
+      <div class="row">
+        <label class="fld"><span id="weeklyLabel">Dollars per week</span><span class="money-in"><input id="weekly" type="text" inputmode="decimal"></span></label>
+        <button class="btn" id="saveWeekly" type="button">Save</button>
+      </div>
+    </details>
+  </section>
+
+  <!-- BILLS -->
+  <section id="tab-bills" class="tab" aria-label="Bills" hidden>
+    <div id="paydayCard"></div>
+    <div class="card" id="billsSummary"></div>
+    <div class="card" id="accountsCard"></div>
+    <div class="card"><div id="billsList"></div></div>
+    <p class="muted small">Weekend and holiday dates can post a business day later. <a href="#" data-act="goto" data-tab="settings" data-focus="set-bills">Edit bills in Settings.</a></p>
+  </section>
+
+  <!-- DEBTS -->
+  <section id="tab-debts" class="tab" aria-label="Debts" hidden>
+    <div class="card" id="debtSummary"></div>
+    <div id="debtCards"></div>
+    <div class="card">
+      <h2>Payoff timeline</h2>
+      <ul class="list" id="timeline"></ul>
+    </div>
+  </section>
+
+  <!-- PARTNER -->
+  <section id="tab-partner" class="tab" aria-label="Partner" hidden>
+    <div class="card" id="parCard"></div>
+    <form class="card" id="parForm" autocomplete="off">
+      <h2>Add to the log</h2>
+      <div class="row">
+        <label class="fld" style="flex-basis:120px"><span>Amount</span><span class="money-in"><input id="cAmt" type="text" inputmode="decimal" placeholder="0.00" aria-label="Amount in dollars"></span></label>
+        <label class="fld" style="flex-basis:152px"><span>Date</span><input id="cDate" type="date"></label>
+      </div>
+      <div class="row">
+        <label class="fld"><span>Note</span><input id="cNote" type="text" maxlength="60" placeholder="Optional"></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" type="button" id="cPaid" style="flex:1 1 140px">I paid them</button>
+        <button class="btn" type="button" id="cCharge" style="flex:1 1 140px">They covered more</button>
+      </div>
+    </form>
+    <div class="card"><h2>Log</h2><ul class="list" id="parLog"></ul></div>
+    <details class="card">
+      <summary id="setBalSummary">Set the balance to an exact amount</summary>
+      <div class="row">
+        <label class="fld"><span>You owe exactly (as of today)</span><span class="money-in"><input id="setBal" type="text" inputmode="decimal" placeholder="0.00"></span></label>
+        <button class="btn" id="saveSetBal" type="button">Set balance</button>
+      </div>
+      <p class="muted small" style="margin-top:10px">This adds a "Balance adjustment" entry dated today, so the log still adds up.</p>
+    </details>
+    <details class="card">
+      <summary id="minSummary">Monthly payment</summary>
+      <div class="row">
+        <label class="fld"><span>Dollars per month</span><span class="money-in"><input id="cmin" type="text" inputmode="decimal"></span></label>
+        <button class="btn" id="saveMin" type="button">Save</button>
+      </div>
+      <p class="muted small" style="margin-top:10px">This drives the payoff estimate above.</p>
+    </details>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="tab" aria-label="Settings" hidden>
+    <div id="settingsBody"></div>
+    <div class="card" id="set-data">
+      <h2>Backup</h2>
+      <p class="small">Export saves everything (settings, bills, debts, logs and purchases) as a plan file. Importing that file later restores it exactly.</p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" type="button" data-act="export" style="flex:1 1 140px">Export plan file</button>
+        <button class="btn" type="button" data-act="copy-export" style="flex:1 1 140px">Copy as text</button>
+      </div>
+    </div>
+    <div class="card" id="settingsImport"></div>
+    <div class="card">
+      <h2>Reset</h2>
+      <p class="small">Delete everything Money Plan has saved on this device and go back to the start screen.</p>
+      <div class="row" style="margin-top:12px"><button class="btn" type="button" data-act="reset">Reset everything</button></div>
+      <div id="resetConfirm"></div>
+    </div>
+    <div class="card flat">
+      <h2>Privacy</h2>
+      <p class="small">Your plan lives only in this browser's storage on this device. The app makes no network requests and has no analytics. It only downloads its own files so it works offline.</p>
+      <p class="muted small" style="margin-top:8px" id="storageInfo"></p>
+    </div>
+  </section>
+
+  <!-- Import panel: moved between the start screen and Settings -->
+  <div id="importer">
+    <h2>Import a plan</h2>
+    <label class="fld wide"><span>Choose a plan file</span><input type="file" id="impFile" accept=".json,application/json,text/plain"></label>
+    <label class="fld wide" style="margin-top:12px"><span>…or paste the plan here</span>
+      <textarea id="impText" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder='{ "app": "money-plan", "version": 1, "settings": { … } }'></textarea></label>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" type="button" id="impValidate" style="flex:1 1 140px">Validate</button>
+      <button class="btn" type="button" id="impClear" style="flex:0 1 100px">Clear</button>
+    </div>
+    <div id="impResult" aria-live="polite"></div>
+  </div>
+</div>
+
+<nav class="nav" role="tablist" aria-label="Sections" hidden>
+  <button role="tab" data-tab="today" aria-selected="true">Today</button>
+  <button role="tab" data-tab="bills" aria-selected="false">Bills</button>
+  <button role="tab" data-tab="debts" aria-selected="false">Debts</button>
+  <button role="tab" data-tab="partner" aria-selected="false" id="partnerTab">Partner</button>
+  <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+</nav>
+<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

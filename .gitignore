@@ -1,0 +1,12 @@
+# ---- PRIVATE: never commit real financial data ----
+my_plan.json
+*my_plan*.json
+money_plan.html
+money-plan-backup*.json
+private/
+
+# tooling
+node_modules/
+test-results/
+playwright-report/
+.claude/

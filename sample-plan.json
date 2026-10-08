@@ -1,0 +1,46 @@
+{
+  "app": "money-plan",
+  "version": 1,
+  "settings": {
+    "weeklyLimit": 140,
+    "weekStartsOn": "monday",
+    "warnBelow": 75,
+    "paycheck": { "amount": 1200, "knownPayday": "2026-10-02", "everyDays": 14 },
+    "savingsPerPayday": 40,
+    "rent": {
+      "amount": 800,
+      "dueDay": 1,
+      "paidInHalvesOnLastTwoPaydaysBeforeDue": true,
+      "extras": [
+        { "dueMonth": "2026-12", "amount": 20, "note": "Example: one-off extra with December rent" }
+      ]
+    },
+    "checking": { "balance": 1000, "asOf": "2026-10-01" },
+    "savings": { "balance": 400, "asOf": "2026-10-01" },
+    "partner": { "label": "Partner", "monthlyPayment": 25 },
+    "holidays": ["2026-11-26", "2026-12-25"]
+  },
+  "bills": [
+    { "name": "Gym", "amount": 20, "day": 3, "end": null, "kind": "subscription", "active": true },
+    { "name": "Phone", "amount": 40, "day": 5, "end": null, "kind": "other", "active": true },
+    { "name": "Streaming service", "amount": 10, "day": 12, "end": null, "kind": "subscription", "active": true },
+    { "name": "Store card", "amount": 30, "day": 15, "end": "2027-06-15", "kind": "debt", "active": true },
+    { "name": "Internet", "amount": 60, "day": 18, "end": null, "kind": "other", "shiftToBusinessDay": true, "active": true },
+    { "name": "Car insurance", "amount": 80, "day": 22, "end": null, "kind": "insurance", "active": true },
+    { "name": "Personal loan", "amount": 125, "day": 25, "end": null, "kind": "debt", "shiftToBusinessDay": true, "active": true },
+    { "name": "Music app", "amount": 10, "day": 9, "end": null, "kind": "subscription", "active": false }
+  ],
+  "debts": [
+    { "name": "Store card", "billName": "Store card", "balance": 270, "balanceAsOf": "2026-10-01", "paymentsLeft": 9, "apr": 0.2, "note": "Example debt paid off by a bill with an end date." },
+    { "name": "Personal loan", "billName": "Personal loan", "balance": 3000, "balanceAsOf": "2026-10-01", "paymentsLeft": 26, "apr": 0.08, "projectedPayoff": "2028-11", "projectedPayoffWithExtra": "2028-03", "note": "Example debt with a payment count instead of an end date." }
+  ],
+  "partnerLedger": [
+    { "type": "charge", "amount": 310, "date": "2026-10-01", "note": "Example: a bill they covered" },
+    { "type": "payment", "amount": 25, "date": "2026-10-05", "note": "Example: first payment back" },
+    { "type": "charge", "amount": 100, "date": "2026-11-20", "note": "Example: a planned expense" }
+  ],
+  "purchases": [
+    { "amount": 12, "note": "Lunch", "category": "food", "date": "2026-10-05" },
+    { "amount": 30, "note": "Fuel", "category": "gas", "date": "2026-10-06" }
+  ]
+}
