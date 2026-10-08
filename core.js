@@ -212,6 +212,16 @@ function normLedger(ctx,e,where){
     ts:typeof e.ts==='number'?e.ts:0
   };
 }
+function normPaycheck(ctx,r,where){
+  r=asObj(ctx,r,where,true);
+  return {
+    id:keepId(r.id),
+    date:readDate(ctx,r,'date',where,{required:true}),
+    amount:readNum(ctx,r,'amount',where,{required:true,positive:true,money:true,example:'1200'}),
+    toSpending:readNum(ctx,r,'toSpending',where,{def:null,min:0,money:true,example:'320'}),
+    movedToSavings:readNum(ctx,r,'movedToSavings',where,{def:null,min:0,money:true,example:'50'})
+  };
+}
 function normPurchase(ctx,p,where){
   p=asObj(ctx,p,where,true);
   var cat=readStr(ctx,p,'category',where,{def:'other',max:30});
@@ -277,6 +287,12 @@ function normalizePlan(obj){
   var debts=asArr(ctx,obj.debts,'debts').map(function(d,i){return normDebt(ctx,d,'Debt '+(i+1)+nameOf(d));});
   var ledger=asArr(ctx,obj.partnerLedger,'partnerLedger').map(function(e,i){return normLedger(ctx,e,(settings.partner.label||'Partner')+' log entry '+(i+1));});
   var purchases=asArr(ctx,obj.purchases,'purchases').map(function(p,i){return normPurchase(ctx,p,'Purchase '+(i+1));});
+  var paychecks=[],pdSeen={};
+  asArr(ctx,obj.paychecks,'paychecks').forEach(function(r,i){
+    var x=normPaycheck(ctx,r,'Paycheck '+(i+1));
+    if(x.date&&pdSeen[x.date]){ctx.warnings.push('Two paychecks are dated '+x.date+'; only the last one was kept.');paychecks=paychecks.filter(function(y){return y.date!==x.date;});}
+    pdSeen[x.date]=1;paychecks.push(x);
+  });
   if(obj.bills===undefined)ctx.warnings.push('The file has no "bills" list, so it starts with no bills.');
 
   var seen={};
@@ -295,14 +311,14 @@ function normalizePlan(obj){
     if(ctx.errors.length>12)errs.push('…and '+(ctx.errors.length-12)+' more problems.');
     return fail(errs,ctx.warnings);
   }
-  return {ok:true,errors:[],warnings:ctx.warnings,plan:{app:APP,version:VERSION,settings:settings,bills:bills,debts:debts,partnerLedger:ledger,purchases:purchases}};
+  return {ok:true,errors:[],warnings:ctx.warnings,plan:{app:APP,version:VERSION,settings:settings,bills:bills,debts:debts,partnerLedger:ledger,purchases:purchases,paychecks:paychecks}};
 }
 
 /* Same field order and optional-field rules as the documented format, so export → import → export is identical. */
 function exportPlan(plan){
   var s=plan.settings;
   var sortLog=function(a,b){return (a.date<b.date?-1:a.date>b.date?1:0)||(a.ts-b.ts);};
-  return {
+  var out={
     app:APP,version:VERSION,
     settings:{
       weeklyLimit:s.weeklyLimit,weekStartsOn:s.weekStartsOn,warnBelow:s.warnBelow,
@@ -329,6 +345,14 @@ function exportPlan(plan){
     partnerLedger:plan.partnerLedger.slice().sort(sortLog).map(function(e){return {type:e.type,amount:e.amount,date:e.date,note:e.note};}),
     purchases:plan.purchases.slice().sort(sortLog).map(function(p){return {amount:p.amount,note:p.note,category:p.category,date:p.date};})
   };
+  /* optional: only written once you've recorded a paycheck, so older files round-trip unchanged */
+  if(plan.paychecks&&plan.paychecks.length)out.paychecks=plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).map(function(r){
+    var o={date:r.date,amount:r.amount};
+    if(r.toSpending!=null)o.toSpending=r.toSpending;
+    if(r.movedToSavings!=null)o.movedToSavings=r.movedToSavings;
+    return o;
+  });
+  return out;
 }
 
 /* ---------- schedule ---------- */
@@ -415,8 +439,9 @@ function weekData(plan,today){
     if(p.date===t0)todaySpent+=p.amount;
   });
   spent=round2(spent);
-  return {ws:w.ws,we:w.we,spent:spent,today:round2(todaySpent),limit:plan.settings.weeklyLimit,
-    left:round2(plan.settings.weeklyLimit-spent),daysLeft:dayDiff(t,w.we)+1};
+  var lim=plan.settings.weeklyLimit>0?weekLimit(plan,w.ws,w.we):0;
+  return {ws:w.ws,we:w.we,spent:spent,today:round2(todaySpent),limit:lim,target:plan.settings.weeklyLimit,
+    left:round2(lim-spent),daysLeft:dayDiff(t,w.we)+1};
 }
 
 /* ---------- partner ---------- */
@@ -472,7 +497,7 @@ function cashProjection(plan,today,days){
   if(start>end)return null;
   var ev={},add=function(d,a){var k=ds(d);ev[k]=(ev[k]||0)+a;};
   var from=addDays(start,1);
-  paydays(plan,from,end).forEach(function(d){add(d,s.paycheck.amount-s.savingsPerPayday);});
+  periodsCovering(plan,from,end).forEach(function(p){if(p.start>=from&&p.start<=end)add(p.start,p.pay-p.savings);});
   billsBetween(plan,from,end).forEach(function(b){add(b.date,-b.amount);});
   plan.purchases.forEach(function(p){if(p.date>s.checking.asOf&&p.date<=ds(end))add(pd(p.date),-p.amount);});
   var bal=s.checking.balance,now=null,low=null,lowDate=null;
@@ -488,31 +513,64 @@ function cashProjection(plan,today,days){
 }
 
 /* ---------- per-paycheck plan ---------- */
-/* Splits time into pay periods (payday up to the day before the next one) and budgets each paycheck:
-   bills and rent due in the period, the savings move, and planned spending at the weekly limit. */
-function payPeriods(plan,today,count){
-  var s=plan.settings,t=sod(today),step=s.paycheck.everyDays,out=[];
-  var start=paydays(plan,addDays(t,-step+1),t)[0];
-  var spending=round2(s.weeklyLimit*step/7);
-  for(var i=0;i<count;i++){
-    var st=addDays(start,i*step),en=addDays(st,step-1),a=ds(st),b=ds(en);
+/* Each pay period runs from a payday to the day before the next one. A paycheck pays the bills due in its
+   period, may hold some back for a later period that would otherwise come up short, and the rest is
+   "yours to split" between spending and savings. The default split is the usual plan (weekly target for
+   spending, the rest saved, at least the minimum saving) scaled to the real paycheck, so a bigger check
+   grows both and a smaller one shrinks both. A split you pick yourself is stored on the paycheck record. */
+function periodStart(plan,d){var step=plan.settings.paycheck.everyDays;d=sod(d);return paydays(plan,addDays(d,-step+1),d)[0];}
+function paycheckRecord(plan,dateStr){
+  for(var i=0;i<plan.paychecks.length;i++)if(plan.paychecks[i].date===dateStr)return plan.paychecks[i];
+  return null;
+}
+function periodChain(plan,first,count,today){
+  var s=plan.settings,step=s.paycheck.everyDays,exp=s.paycheck.amount,minSave=s.savingsPerPayday;
+  var S=round2(s.weeklyLimit*step/7),t=today?sod(today):null,ps=[],i;
+  for(i=0;i<count;i++){
+    var st=addDays(first,i*step),en=addDays(st,step-1),a=ds(st),b=ds(en),rec=paycheckRecord(plan,a);
     var bills=billsBetween(plan,st,en).filter(function(x){return x.amount>0;});
-    var billTotal=round2(bills.reduce(function(sum,x){return sum+x.amount;},0));
-    var spent=round2(plan.purchases.reduce(function(sum,p){return p.date>=a&&p.date<=b?sum+p.amount:sum;},0));
-    out.push({start:st,end:en,pay:s.paycheck.amount,bills:bills,billTotal:billTotal,savings:s.savingsPerPayday,
-      spending:spending,spent:spent,current:st<=t&&t<=en,
-      left:round2(s.paycheck.amount-billTotal-s.savingsPerPayday-spending),keepForNext:0,carryIn:0});
+    ps.push({start:st,end:en,expected:exp,rec:rec,recorded:!!rec,pay:rec?rec.amount:exp,bills:bills,
+      billTotal:round2(bills.reduce(function(sum,x){return sum+x.amount;},0)),
+      spent:round2(plan.purchases.reduce(function(sum,p){return p.date>=a&&p.date<=b?sum+p.amount:sum;},0)),
+      current:!!t&&st<=t&&t<=en,carryIn:0,keepForNext:0,planSpending:S});
   }
-  /* if the next period comes up short, suggest holding back some of this one's surplus */
-  for(i=0;i<out.length;i++){
-    var p=out[i],avail=round2(p.left+p.carryIn);
-    if(i+1<out.length&&out[i+1].left<0&&avail>0){
-      p.keepForNext=round2(Math.min(avail,-out[i+1].left));
-      out[i+1].carryIn=p.keepForNext;
-    }
-    p.afterCarry=round2(p.left+p.carryIn);
+  for(i=0;i<ps.length;i++){
+    var p=ps[i],n=ps[i+1];
+    var need=n?round2(n.billTotal+S+minSave-n.pay):0;
+    var freeFor=function(pay){
+      var avail=round2(pay+p.carryIn-p.billTotal),keep=need>0&&avail>0?Math.min(need,avail):0;
+      return {free:round2(avail-keep),keep:round2(keep)};
+    };
+    var e=freeFor(exp),act=freeFor(p.pay),sug;
+    p.keepForNext=act.keep;p.free=act.free;
+    if(n)n.carryIn=act.keep;
+    if(e.free>0)sug=act.free*Math.max(0,Math.min(S,e.free-minSave))/e.free;
+    else sug=Math.max(0,Math.min(S,act.free-minSave));
+    p.suggested=round2(Math.max(0,Math.min(sug,act.free)));
+    p.custom=!!(p.rec&&p.rec.toSpending!=null);
+    p.spending=p.custom?round2(Math.max(0,Math.min(p.rec.toSpending,Math.max(0,act.free)))):p.suggested;
+    p.savings=round2(Math.max(0,act.free-p.spending));
+    p.short=act.free<0?round2(-act.free):0;
   }
-  return out;
+  return ps;
+}
+/* the current period and the next count-1, with carry-over worked out from the period before */
+function payPeriods(plan,today,count){
+  var step=plan.settings.paycheck.everyDays,cur=periodStart(plan,today);
+  return periodChain(plan,addDays(cur,-step),count+2,today).slice(1,count+1); /* one before for carry-in, one after for look-ahead */
+}
+function periodsCovering(plan,from,to){
+  var step=plan.settings.paycheck.everyDays,st=periodStart(plan,from);
+  var n=Math.ceil((dayDiff(st,to)+1)/step);
+  return periodChain(plan,addDays(st,-step),n+2,from).slice(1,n+1);
+}
+/* a week's limit: each day gets its pay period's spending share divided by the days in the period */
+function weekLimit(plan,ws,we){
+  var step=plan.settings.paycheck.everyDays,ps=periodsCovering(plan,ws,we),sum=0;
+  for(var d=sod(ws);d<=we;d=addDays(d,1)){
+    for(var i=0;i<ps.length;i++)if(ps[i].start<=d&&d<=ps[i].end){sum+=ps[i].spending/step;break;}
+  }
+  return round2(sum);
 }
 
 /* ---------- bank CSV import ---------- */
@@ -677,10 +735,10 @@ return {
   APP:APP,VERSION:VERSION,KINDS:KINDS,WEEKDAYS:WEEKDAYS,
   ds:ds,pd:pd,sod:sod,addDays:addDays,dayDiff:dayDiff,round2:round2,isDateStr:isDateStr,isMonthStr:isMonthStr,uid:uid,clone:clone,money:money,
   Ctx:Ctx,parsePlan:parsePlan,normalizePlan:normalizePlan,exportPlan:exportPlan,
-  normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,
+  normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,
   paydays:paydays,billOccurrences:billOccurrences,rentOccurrences:rentOccurrences,billsBetween:billsBetween,totalBetween:totalBetween,
   weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection,
-  payPeriods:payPeriods,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
+  payPeriods:payPeriods,periodStart:periodStart,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
   matchBankTxns:matchBankTxns,frequentPurchases:frequentPurchases
 };
 });

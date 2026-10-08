@@ -22,7 +22,7 @@ var COLL={bill:'bills',debt:'debts',purchase:'purchases',ledger:'partnerLedger'}
 var NORM={bill:C.normBill,debt:C.normDebt,purchase:C.normPurchase,ledger:C.normLedger};
 
 var plan=null,storageOK=true,loadError='';
-var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,period:0,quick:[],checks:{}};
+var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,payFree:0};
 var imp={result:null,confirming:false};
 
 /* ---------- storage: every call guarded ---------- */
@@ -184,7 +184,8 @@ function renderWeek(){
       '<div class="stat"><b>'+money(w.spent)+'</b><span>spent of '+money(lim)+'</span></div>'+
       '<div class="stat"><b>'+money(perDay)+'</b><span>per day, even pace</span></div>'+
       '<div class="stat"><b>'+money(w.today)+'</b><span>spent today</span></div>'+
-    '</div>';
+    '</div>'+
+    (Math.abs(w.limit-w.target)>=0.005?'<p class="muted small" style="margin-top:10px">This week\'s limit follows your paychecks (your usual target is '+money(w.target)+').</p>':'');
 }
 function renderCashWarn(){
   var s=plan.settings,p=C.cashProjection(plan,new Date(),45),el=$('#cashWarn');
@@ -235,57 +236,76 @@ function renderChips(){
   box.innerHTML=l.map(function(c){return '<button type="button" class="chip" data-cat="'+esc(c[0])+'" aria-pressed="'+(c[0]===ui.selCat)+'">'+esc(c[1])+'</button>';}).join('');
 }
 
-/* ---------- Paycheck plan ---------- */
-var CHECK_KEY='money-plan:checklist';
-function loadChecks(){
-  var o={};
-  try{o=JSON.parse(storageGet(CHECK_KEY)||'{}')||{};}catch(e){o={};}
-  var cutoff=ds(addDays(new Date(),-60));
-  Object.keys(o).forEach(function(k){if(k.slice(0,10)<cutoff)delete o[k];});
-  return o;
+/* ---------- Paycheck ---------- */
+function perWeek(amount){return money(amount*7/plan.settings.paycheck.everyDays);}
+function curPeriod(){return C.payPeriods(plan,new Date(),1)[0];}
+function renderPayBanner(){
+  var p=curPeriod(),el=$('#payBanner');
+  el.innerHTML=p.recorded?'':'<div class="banner pay"><span><b>Payday '+esc(wd(p.start))+'.</b> Enter what you actually got paid so your limits match it.</span>'+
+    '<button class="btn small" type="button" data-act="goto-pay">Enter paycheck</button></div>';
 }
 function renderPlan(t){
-  var s=plan.settings,el=$('#paydayCard'),periods=C.payPeriods(plan,t,4);
-  if(ui.period>=periods.length)ui.period=0;
-  var p=periods[ui.period],next=periods[ui.period+1],prev=periods[ui.period-1];
-  var step=s.paycheck.everyDays,weeks=step%7===0?plural(step/7,'week'):plural(step,'day');
-  var h='<div class="card"><h2>Paycheck plan</h2>';
-  var np=periods[periods[0].start<t?1:0];
-  if(np){var n=dayDiff(t,np.start);h+='<p><b>'+(n===0?'Payday is today.':'Next payday: '+esc(wd(np.start))+' ('+inDays(n).toLowerCase()+').')+'</b></p>';}
-  h+='<div class="chips" role="group" aria-label="Pay period">'+periods.map(function(x,i){
-    return '<button type="button" class="chip" data-act="period" data-i="'+i+'" aria-pressed="'+(i===ui.period)+'">'+esc(fMD.format(x.start))+(x.current?' · now':'')+'</button>';
-  }).join('')+'</div>';
-  h+='<p class="muted small" style="margin-bottom:6px">Paid '+esc(wd(p.start))+'. Covers '+esc(fMD.format(p.start))+' to '+esc(fMD.format(p.end))+'.</p>';
-  h+='<div class="kv"><span>Paycheck</span><b class="in">+'+money(p.pay)+'</b></div>';
-  h+='<details class="sub"><summary><span>Bills and rent ('+p.bills.length+')</span><b>−'+money(p.billTotal)+'</b></summary><ul class="list">'+
-    p.bills.map(function(b){return '<li class="kv"><span>'+esc(fMD.format(b.date))+' · '+esc(b.name)+'</span><b>'+money(b.amount)+'</b></li>';}).join('')+'</ul></details>';
-  if(p.savings>0)h+='<div class="kv"><span>To savings</span><b>−'+money(p.savings)+'</b></div>';
-  h+='<div class="kv"><span>Spending ('+weeks+' at '+money(s.weeklyLimit)+' a week)</span><b>−'+money(p.spending)+'</b></div>';
-  if(p.current||p.spent)h+='<div class="kv muted"><span>Spent so far this period</span><b>'+money(p.spent)+'</b></div>';
-  h+='<div class="kv total"><span>'+(p.left<0?'Short by':'Left over')+'</span><b>'+money(Math.abs(p.left))+'</b></div>';
-  var msg,cls='';
-  if(p.left<0){
-    if(p.carryIn>0&&p.afterCarry<0){cls='bad';msg='With '+money(p.carryIn)+' kept from the '+fMD.format(prev.start)+' paycheck, it\'s still '+money(-p.afterCarry)+' short. Spend less this period, or let your checking balance cover it.';}
-    else if(p.carryIn>0){cls='warn';msg='Covered by the '+money(p.carryIn)+' kept from the '+fMD.format(prev.start)+' paycheck.';}
-    else{cls='bad';msg='This paycheck doesn\'t cover the period. Spend less, or let your checking balance cover the '+money(-p.left)+'.';}
-  }else if(p.keepForNext>0){
-    cls='warn';msg='Keep '+money(p.keepForNext)+' of this paycheck: the '+fMD.format(next.start)+' period is '+money(-next.left)+' short.';
-  }else msg='Covers everything'+(p.left>0?' with '+money(p.left)+' to spare.':'.');
-  h+='<span class="status'+(cls?' '+cls:'')+'">'+esc(msg)+'</span>';
-
-  /* payday checklist, remembered on this device */
-  var items=[];
-  if(p.savings>0)items.push(['sav','Move '+money(p.savings)+' to savings']);
-  p.bills.forEach(function(b,i){if(b.kind==='rent'&&dayDiff(p.start,b.date)===0)items.push(['rent'+i,'Pay '+b.name.charAt(0).toLowerCase()+b.name.slice(1)+': '+money(b.amount)]);});
-  if(p.keepForNext>0)items.push(['keep','Leave '+money(p.keepForNext)+' in checking for the '+fMD.format(next.start)+' period']);
-  if(items.length){
-    var key=ds(p.start);
-    h+='<p class="small" style="margin-top:14px"><b>On payday</b></p>'+items.map(function(it){
-      var k=key+'|'+it[0];
-      return '<label class="check"><input type="checkbox" data-check="'+esc(k)+'"'+(ui.checks[k]?' checked':'')+'><span>'+esc(it[1])+'</span></label>';
-    }).join('');
+  var s=plan.settings,el=$('#paydayCard'),periods=C.payPeriods(plan,t,4),p=periods[0],next=periods[1];
+  var h='<div class="card" id="payCard"><h2>This paycheck</h2>';
+  h+='<p class="small"><b>Payday '+esc(wd(p.start))+'</b> · covers '+esc(fMD.format(p.start))+' to '+esc(fMD.format(p.end))+'</p>';
+  if(!p.recorded||ui.payEdit){
+    h+='<div class="paybox"><div class="row"><label class="fld"><span>How much did you get paid?</span><span class="money-in"><input id="payAmt" type="text" inputmode="decimal" placeholder="'+p.expected.toFixed(2)+'" value="'+(p.recorded?p.pay.toFixed(2):'')+'"></span></label>'+
+      '<button class="btn primary" type="button" data-act="pay-save">Save</button></div>'+
+      (p.recorded?'<div class="btns" style="justify-content:flex-start;margin-top:8px"><button class="btn small" type="button" data-act="pay-cancel">Cancel</button><button class="btn small" type="button" data-act="pay-clear">Remove this paycheck</button></div>':
+        '<p class="muted small" style="margin-top:8px">Until you enter it, the numbers below use your usual '+money(p.expected)+'.</p>')+'</div>';
   }
-  el.innerHTML=h+'</div>';
+  h+='<div class="kv"><span>Paycheck'+(p.recorded?(ui.payEdit?'':' <button class="link" type="button" data-act="pay-edit">Edit</button>'):' (expected)')+'</span><b class="in">+'+money(p.pay)+'</b></div>';
+  if(p.carryIn>0)h+='<div class="kv"><span>Held back from last paycheck</span><b class="in">+'+money(p.carryIn)+'</b></div>';
+  h+='<details class="sub"><summary><span>Bills and rent before '+esc(fMD.format(next.start))+' ('+p.bills.length+')</span><b>−'+money(p.billTotal)+'</b></summary><ul class="list">'+
+    p.bills.map(function(b){return '<li class="kv"><span>'+esc(fMD.format(b.date))+' · '+esc(b.name)+'</span><b>'+money(b.amount)+'</b></li>';}).join('')+'</ul></details>';
+  if(p.keepForNext>0)h+='<div class="kv"><span>Leave in checking for the '+esc(fMD.format(next.start))+' period</span><b>−'+money(p.keepForNext)+'</b></div>';
+  h+='<div class="kv total"><span>'+(p.free<0?'Short by':'Yours to split')+'</span><b>'+money(Math.abs(p.free))+'</b></div>';
+  ui.payFree=p.free;
+  if(p.free>0){
+    if(p.recorded){
+      h+='<div class="split"><input type="range" id="splitRange" min="0" max="'+Math.round(p.free*100)+'" step="1" value="'+Math.round(p.spending*100)+'" aria-label="Move the slider to split between spending and savings">'+
+        '<div class="splitvals"><div><b id="spendVal">'+money(p.spending)+'</b><span>to spend · <span id="spendWk">'+perWeek(p.spending)+'</span> a week</span></div>'+
+        '<div class="r"><b id="saveVal">'+money(p.savings)+'</b><span>to savings</span></div></div>'+
+        '<div class="btns" id="splitBtns"'+(p.custom?'':' hidden')+'><button class="btn small" type="button" data-act="split-reset">Back to suggested</button><button class="btn primary" type="button" data-act="split-save" id="splitSave"'+(p.custom?' hidden':'')+'>Save split</button></div>'+
+        '<p class="muted small" style="margin-top:6px">'+(p.custom?'You chose this split.':'Suggested: your '+money(s.weeklyLimit)+'-a-week target scaled to this paycheck. Slide to spend more or save more.')+'</p></div>';
+      if(p.savings>0||p.rec.movedToSavings!=null){
+        if(p.rec.movedToSavings!=null){
+          h+='<span class="status">Moved '+money(p.rec.movedToSavings)+' to savings.'+(Math.abs(p.rec.movedToSavings-p.savings)>=0.005?' The split now says '+money(p.savings)+'.':'')+'</span>';
+        }else h+='<div class="row" style="margin-top:12px"><button class="btn primary" type="button" data-act="moved" style="flex:1 1 100%">I moved '+money(p.savings)+' to savings</button></div>';
+      }
+    }else{
+      h+='<div class="kv muted"><span>Suggested: to spend ('+perWeek(p.spending)+' a week)</span><b>'+money(p.spending)+'</b></div>'+
+        '<div class="kv muted"><span>Suggested: to savings</span><b>'+money(p.savings)+'</b></div>';
+    }
+  }
+  if(p.short)h+='<span class="status bad">This paycheck is '+money(p.short)+' short of the bills due before '+esc(fMD.format(next.start))+'. Cover the gap from checking or savings, and hold off on extra spending.</span>';
+  if(p.keepForNext>0)h+='<span class="status warn">Leave '+money(p.keepForNext)+' in checking. The '+esc(fMD.format(next.start))+' paycheck won\'t cover that period\'s bills and spending on its own.</span>';
+  if(p.current&&p.spent)h+='<p class="muted small" style="margin-top:10px">Spent so far this pay period: '+money(p.spent)+'.</p>';
+
+  h+='<p class="small" style="margin-top:16px"><b>Coming up</b> <span class="muted">(at your usual '+money(p.expected)+')</span></p><ul class="list">'+periods.slice(1).map(function(q,i){
+    var n2=periods[i+2],bits=['Bills '+money(q.billTotal)];
+    if(q.carryIn)bits.push('uses '+money(q.carryIn)+' held back');
+    if(q.keepForNext)bits.push('holds '+money(q.keepForNext)+(n2?' for '+fMD.format(n2.start):''));
+    if(q.short)bits.push('short '+money(q.short));
+    return '<li class="item"><div><div class="t">'+esc(wd(q.start))+(q.recorded?' · '+money(q.pay):'')+'</div><div class="s">'+esc(bits.join(' · '))+'</div></div>'+
+      '<span class="a">'+perWeek(q.spending)+'</span><span class="s">a week</span></li>';
+  }).join('')+'</ul></div>';
+  el.innerHTML=h;
+}
+function savePaycheck(){
+  var v=parseAmount($('#payAmt').value);
+  if(!v){toast('Enter the amount you were paid, for example 1200.00.');$('#payAmt').focus();return;}
+  var date=ds(curPeriod().start);
+  ui.payEdit=false;
+  commit(function(pl){
+    var r=C.paycheckRecord(pl,date);
+    if(r){if(r.amount!==v)r.toSpending=null;r.amount=v;}
+    else pl.paychecks.push({id:C.uid(),date:date,amount:v,toSpending:null,movedToSavings:null});
+  },'Paycheck saved: '+money(v),true);
+}
+function payRecordEdit(fn,msg){
+  var date=ds(curPeriod().start);
+  commit(function(pl){var r=C.paycheckRecord(pl,date);if(!r)return 'Enter this paycheck first.';return fn(pl,r);},msg,true);
 }
 
 /* ---------- quick add ---------- */
@@ -373,9 +393,8 @@ function readBankFile(f){
 function renderBills(){
   var s=plan.settings,t=sod(new Date()),end=addDays(t,45);
   var bills=C.billsBetween(plan,t,end).filter(function(b){return b.amount>0;});
-  var save=s.savingsPerPayday;
-  var pays=C.paydays(plan,t,end).map(function(d){
-    return {date:d,name:'Payday',amount:s.paycheck.amount,kind:'pay',note:'Take-home'+(save>0?' · move '+money(save)+' to savings':'')};
+  var pays=C.periodsCovering(plan,t,end).filter(function(q){return q.start>=t&&q.start<=end;}).map(function(q){
+    return {date:q.start,name:'Payday',amount:q.pay,kind:'pay',note:(q.recorded?'Paid':'Expected')+(q.savings>0?' · '+money(q.savings)+' to savings':'')};
   });
   var all=bills.concat(pays).sort(function(a,b){return (a.date-b.date)||((a.kind==='pay'?-1:0)-(b.kind==='pay'?-1:0));});
   var week=0,month=0;
@@ -550,11 +569,11 @@ function debtEditor(d){
 function renderSettings(){
   var s=plan.settings,L=label(),h='';
   h+=section('set-general','Spending',
-    '<div class="row">'+fMoney('Weekly spending limit','weeklyLimit',s.weeklyLimit)+
+    '<div class="row">'+fMoney('Weekly spending target','weeklyLimit',s.weeklyLimit)+
     fSelect('Week starts on','weekStartsOn',s.weekStartsOn,C.WEEKDAYS.map(function(d){return [d,cap(d)];}))+'</div>'+
-    '<div class="row">'+fMoney('Warn if checking could drop below','warnBelow',s.warnBelow)+fMoney('Move to savings each payday','savingsPerPayday',s.savingsPerPayday)+'</div>');
+    '<div class="row">'+fMoney('Warn if checking could drop below','warnBelow',s.warnBelow)+fMoney('Save at least this each payday','savingsPerPayday',s.savingsPerPayday)+'</div>');
   h+=section('set-paycheck','Paycheck',
-    '<div class="row">'+fMoney('Take-home per paycheck','paycheck.amount',s.paycheck.amount)+fText('Paid every (days)','paycheck.everyDays',s.paycheck.everyDays,{mode:'numeric'})+'</div>'+
+    '<div class="row">'+fMoney('Usual take-home per paycheck','paycheck.amount',s.paycheck.amount)+fText('Paid every (days)','paycheck.everyDays',s.paycheck.everyDays,{mode:'numeric'})+'</div>'+
     '<div class="row">'+fDate('Any payday (past or future)','paycheck.knownPayday',s.paycheck.knownPayday)+'</div>');
   h+=section('set-rent','Rent',
     '<div class="row">'+fMoney('Rent','rent.amount',s.rent.amount)+fText('Due day of month','rent.dueDay',s.rent.dueDay,{mode:'numeric'})+'</div>'+
@@ -616,6 +635,7 @@ function summarize(p){
   var pc=C.partnerData(p,t);
   out.push(s.partner.label+': '+plural(p.partnerLedger.length,'log entry','log entries')+(p.partnerLedger.length?', you owe '+money(pc.bal)+' now'+(pc.sched?' and '+money(pc.total)+' after scheduled entries':''):'')+'.');
   out.push('Purchases: '+p.purchases.length+'.');
+  if(p.paychecks.length)out.push('Paychecks entered: '+p.paychecks.length+'.');
   out.push('Checking '+money(s.checking.balance)+(s.checking.asOf?' (as of '+fMDY.format(pd(s.checking.asOf))+')':'')+', savings '+money(s.savings.balance)+(s.savings.asOf?' (as of '+fMDY.format(pd(s.savings.asOf))+')':'')+'.');
   if(s.holidays.length)out.push('Bank holidays: '+s.holidays.length+'.');
   return out;
@@ -692,7 +712,7 @@ function renderAll(){
   }
   $('#tab-welcome').hidden=true;
   $('#settingsImport').appendChild($('#importer'));
-  renderChips();renderQuick();renderWeek();renderCashWarn();renderRecent();renderNext();renderBills();renderDebts();renderPartner();renderSettings();renderImport();
+  renderChips();renderQuick();renderPayBanner();renderWeek();renderCashWarn();renderRecent();renderNext();renderBills();renderDebts();renderPartner();renderSettings();renderImport();
   syncInputs();
   showTab(ui.tab,true);
 }
@@ -822,11 +842,11 @@ $('#impFile').addEventListener('change',function(){
 
 $('#bankFile').addEventListener('change',function(){var f=this.files&&this.files[0];if(f)readBankFile(f);});
 $('#bankResult').addEventListener('change',function(e){if(e.target.matches('[data-bank=pick]'))bankCount();});
-document.addEventListener('change',function(e){
-  var c=e.target.closest('[data-check]');if(!c)return;
-  var k=c.getAttribute('data-check');
-  if(c.checked)ui.checks[k]=true;else delete ui.checks[k];
-  if(!storageSet(CHECK_KEY,JSON.stringify(ui.checks)))toast('Couldn\'t save the checklist. Storage is blocked.');
+document.addEventListener('input',function(e){
+  if(e.target.id!=='splitRange')return;
+  var sp=Number(e.target.value)/100,sv=round2(ui.payFree-sp);
+  $('#spendVal').textContent=money(sp);$('#spendWk').textContent=perWeek(sp);$('#saveVal').textContent=money(sv);
+  $('#splitBtns').hidden=false;$('#splitSave').hidden=false;
 });
 
 /* one delegated handler for every data-act button */
@@ -863,7 +883,30 @@ document.addEventListener('click',function(e){
       break;
     case 'toggle-all':ui.showAll=!ui.showAll;renderRecent();break;
     case 'quick':quickAdd(+b.getAttribute('data-i'));break;
-    case 'period':ui.period=+b.getAttribute('data-i');renderPlan(sod(new Date()));break;
+    case 'goto-pay':
+      showTab('bills');ui.payEdit=false;renderPlan(sod(new Date()));
+      var pa=$('#payAmt');if(pa){pa.scrollIntoView({block:'center'});pa.focus({preventScroll:true});}
+      break;
+    case 'pay-save':savePaycheck();break;
+    case 'pay-edit':ui.payEdit=true;renderPlan(sod(new Date()));if($('#payAmt'))$('#payAmt').focus();break;
+    case 'pay-cancel':ui.payEdit=false;renderPlan(sod(new Date()));break;
+    case 'pay-clear':
+      ui.payEdit=false;
+      var cd=ds(curPeriod().start);
+      commit(function(pl){pl.paychecks=pl.paychecks.filter(function(r){return r.date!==cd;});},'Paycheck removed. Using your usual amount again.',true);
+      break;
+    case 'split-save':
+      var sp=round2(Number($('#splitRange').value)/100);
+      payRecordEdit(function(pl,r){r.toSpending=sp;},'Split saved: '+money(sp)+' to spend');
+      break;
+    case 'split-reset':payRecordEdit(function(pl,r){r.toSpending=null;},'Back to the suggested split');break;
+    case 'moved':
+      var cp=curPeriod(),amt=cp.savings,today0=ds(new Date());
+      payRecordEdit(function(pl,r){
+        r.movedToSavings=amt;
+        pl.settings.savings.balance=round2(pl.settings.savings.balance+amt);pl.settings.savings.asOf=today0;
+      },'Savings is now '+money(plan.settings.savings.balance+amt));
+      break;
     case 'bank-all':case 'bank-none':
       document.querySelectorAll('#bankResult [data-bank=pick]').forEach(function(c){c.checked=act==='bank-all';});bankCount();break;
     case 'bank-add':bankAdd();break;
@@ -892,7 +935,7 @@ document.addEventListener('click',function(e){
     case 'confirm-reset':
       if(!storageRemove(KEY)){toast('Couldn\'t delete the saved data. The browser blocked it.');return;}
       storageRemove(TAB_KEY);
-      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,period:0,quick:[],checks:{}};storageRemove(CHECK_KEY);bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
+      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,payFree:0};bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
       renderAll();window.scrollTo(0,0);toast('Everything was deleted from this device.');
       break;
   }
@@ -913,7 +956,7 @@ window.addEventListener('storage',function(e){
 /* ---------- start ---------- */
 storageOK=checkStorage();
 plan=load();
-ui.checks=loadChecks();
+storageRemove('money-plan:checklist'); /* left by an earlier version */
 ui.tab=storageGet(TAB_KEY)||'today';
 setDefaultDates();
 renderAll();

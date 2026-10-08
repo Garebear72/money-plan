@@ -17,9 +17,15 @@ A small, installable budgeting app (PWA) that runs entirely on your phone.
 
 Today → **Import purchases from your bank** reads a bank activity CSV on the device. Nothing is uploaded. It works with Chase checking and card exports, and with most banks whose file has date, description and amount (or debit/credit) columns. Each money-out row is shown with a cleaned-up name and a guessed category. It's left unticked if it matches a bill, a purchase you've already logged (same amount within 3 days), a transfer or Zelle payment, or a cash withdrawal. Re-importing an overlapping date range doesn't create duplicates.
 
-## Paycheck plan
+## Paychecks
 
-The Bills tab budgets each paycheck: bills and rent due before the next payday, the savings move, and spending at your weekly limit. If a later period comes up short, it tells you how much of an earlier paycheck to keep in checking. Each payday has a checklist (savings move, rent half, buffer) that's remembered on the device.
+On payday, enter what you actually got paid (Today shows a reminder, and the Bills tab has the box). The app then:
+
+1. Takes out the bills and rent due before the next payday.
+2. Holds some back in checking if a later pay period wouldn't cover its own bills and spending.
+3. Splits the rest between **spending** and **savings**. The suggested split is your usual plan (the weekly spending target, at least the minimum saving) scaled to the real paycheck, so a bigger check grows both and a smaller one shrinks both. Drag the slider to choose a different split.
+
+Today's weekly limit follows the split; a week that straddles two paydays blends both. **I moved $X to savings** adds that amount to your savings balance. Until you enter a paycheck, the app plans with your usual take-home amount and labels it "expected".
 
 ## Plan file format
 
@@ -28,11 +34,12 @@ See [`sample-plan.json`](sample-plan.json) for a complete example. All numbers i
 | Key | Contents |
 | --- | --- |
 | `app`, `version` | `"money-plan"`, `1` |
-| `settings` | `weeklyLimit`, `weekStartsOn`, `warnBelow` (warn if projected checking drops below this), `paycheck {amount, knownPayday, everyDays}`, `savingsPerPayday`, `rent {amount, dueDay, paidInHalvesOnLastTwoPaydaysBeforeDue, extras[{dueMonth, amount, note}]}`, `checking {balance, asOf}`, `savings {balance, asOf}`, `partner {label, monthlyPayment}`, `holidays[]` |
+| `settings` | `weeklyLimit` (weekly spending target), `weekStartsOn`, `warnBelow` (warn if projected checking drops below this), `paycheck {amount, knownPayday, everyDays}` (your usual take-home pay and schedule), `savingsPerPayday` (minimum to save each payday), `rent {amount, dueDay, paidInHalvesOnLastTwoPaydaysBeforeDue, extras[{dueMonth, amount, note}]}`, `checking {balance, asOf}`, `savings {balance, asOf}`, `partner {label, monthlyPayment}`, `holidays[]` |
 | `bills[]` | `name`, `amount`, `day`, `end` (date or `null`), `kind` (`subscription`, `debt`, `insurance` or `other`), `shiftToBusinessDay` (optional), `active` |
 | `debts[]` | `name`, `billName` (links to a bill), `balance`, `balanceAsOf`, `paymentsLeft`, `apr` (0.2 = 20%), `projectedPayoff`, `projectedPayoffWithExtra` (both optional, `"YYYY-MM"`), `note` |
 | `partnerLedger[]` | `type` (`charge` or `payment`), `amount`, `date`, `note` |
 | `purchases[]` | `amount`, `note`, `category`, `date` |
+| `paychecks[]` (optional) | `date` (the scheduled payday), `amount` received, `toSpending` (only if you chose your own split), `movedToSavings` (only once you've moved it) |
 
 Dates are `YYYY-MM-DD`. Unknown fields are ignored, missing optional fields get defaults, and mistakes are reported in plain language with the item and field named.
 

@@ -43,7 +43,7 @@ test('import via file picker; every tab shows the expected numbers',async()=>{
   assert.match(await txt(page,'#weekCard'),/\$98\.00/);
   await tab(page,'bills');
   assert.match(await txt(page,'#billsSummary'),/\$10\.00[\s\S]*\$1,165\.00/);
-  assert.match(await txt(page,'#paydayCard'),/Move \$40\.00 to savings/);
+  assert.match(await txt(page,'#paydayCard'),/Suggested: to savings\s*\$820\.00/);
   await tab(page,'debts');
   assert.match(await txt(page,'#debtSummary'),/\$155\.00/);
   await tab(page,'partner');
@@ -74,7 +74,7 @@ test('editing settings updates every tab',async()=>{
   /* a bad value is rejected in the page with a readable message */
   await tab(page,'settings');
   await saveSection(page,'set-paycheck',{'paycheck.amount':'abc'});
-  assert.match(await txt(page,'#set-paycheck [data-errs]'),/Take-home per paycheck should be a number/);
+  assert.match(await txt(page,'#set-paycheck [data-errs]'),/Usual take-home per paycheck should be a number/);
   await context.close();
 });
 
@@ -205,30 +205,51 @@ test('bank CSV import: review, add, undo, and no duplicates on re-import',async(
   await context.close();
 });
 
-test('paycheck plan: per-period budget, carry-over advice and a remembered checklist',async()=>{
-  const {page,context}=await open(env);
+test('paycheck: enter the real amount, split it, move savings, and limits follow',async()=>{
+  const {page,context,dialogs}=await open(env);
   await importFile(page,SAMPLE);
+  /* Today nudges you to enter the paycheck */
+  assert.match(await txt(page,'#payBanner'),/Payday Fri Oct 2\./);
+  assert.match(await txt(page,'#weekCard'),/spent of \$140\.00/);
+  await page.click('#payBanner [data-act=goto-pay]');
+  assert.ok(await page.locator('#tab-bills').isVisible());
+  const card=()=>txt(page,'#payCard');
+  assert.match(await card(),/Paycheck \(expected\)\s*\+\$1,200\.00/);
+  assert.match(await card(),/Yours to split\s*\$1,100\.00[\s\S]*Suggested: to spend \(\$140\.00 a week\)\s*\$280\.00[\s\S]*Suggested: to savings\s*\$820\.00/);
+  /* a bigger check: both buckets grow */
+  await page.fill('#payAmt','1300');await page.click('[data-act=pay-save]');
+  assert.match(await card(),/Paycheck Edit\s*\+\$1,300\.00/);
+  assert.match(await card(),/Yours to split\s*\$1,200\.00/);
+  assert.equal(await txt(page,'#spendVal'),'$305.45');assert.equal(await txt(page,'#saveVal'),'$894.55');
+  await tab(page,'today');
+  assert.equal(await page.locator('#payBanner').innerText(),'');
+  assert.match(await txt(page,'#weekCard'),/spent of \$152\.73[\s\S]*follows your paychecks/);
+  /* slide to a custom split and save it */
   await tab(page,'bills');
-  const card=()=>txt(page,'#paydayCard');
-  assert.match(await card(),/Next payday: Fri Oct 16/);
-  assert.match(await card(),/Oct 2 · now/);
-  assert.match(await card(),/Left over\s*\$780\.00/);
-  await page.click('#paydayCard [data-act=period][data-i="1"]');
-  assert.match(await card(),/Bills and rent \(4\)\s*−\$665\.00[\s\S]*Left over\s*\$215\.00/);
-  assert.match(await card(),/Pay rent half for Nov 1: \$400\.00/);
-  /* lower the paycheck so the Oct 16 period comes up short */
+  await page.locator('#splitRange').evaluate(el=>{el.value='40000';el.dispatchEvent(new Event('input',{bubbles:true}));});
+  assert.equal(await txt(page,'#spendVal'),'$400.00');assert.equal(await txt(page,'#saveVal'),'$800.00');
+  await page.click('[data-act=split-save]');
+  assert.match(await card(),/You chose this split/);
+  await tab(page,'today');
+  assert.match(await txt(page,'#weekCard'),/spent of \$200\.00/);
+  /* the savings button really adds to the savings balance */
+  await tab(page,'bills');
+  await page.click('[data-act=moved]');
+  assert.match(await card(),/Moved \$800\.00 to savings\./);
+  assert.match(await txt(page,'#accountsCard'),/Savings on Oct 7\s*\$1,200\.00/);
+  await page.locator('#toast .toast-btn').click();   // undo
+  assert.match(await txt(page,'#accountsCard'),/\$400\.00/);
+  assert.match(await card(),/I moved \$800\.00 to savings/);
+  /* back to suggested, then remove the paycheck entirely */
+  await page.click('[data-act=split-reset]');
+  assert.equal(await txt(page,'#spendVal'),'$305.45');
+  await page.click('[data-act=pay-edit]');await page.click('[data-act=pay-clear]');
+  assert.match(await card(),/Paycheck \(expected\)/);
+  /* exported files carry the paycheck */
+  await page.fill('#payAmt','1250');await page.click('[data-act=pay-save]');
   await tab(page,'settings');
-  await saveSection(page,'set-paycheck',{'paycheck.amount':800});
-  await tab(page,'bills');
-  await page.click('#paydayCard [data-act=period][data-i="0"]');
-  assert.match(await card(),/Keep \$185\.00 of this paycheck: the Oct 16 period is \$185\.00 short/);
-  await page.click('#paydayCard [data-act=period][data-i="1"]');
-  assert.match(await card(),/Short by\s*\$185\.00[\s\S]*Covered by the \$185\.00 kept from the Oct 2 paycheck/);
-  /* checklist ticks survive a reload */
-  await page.click('#paydayCard [data-act=period][data-i="0"]');
-  await page.locator('#paydayCard label',{hasText:'Move $40.00 to savings'}).locator('input').check();
-  await page.reload();
-  await tab(page,'bills');
-  assert.ok(await page.locator('#paydayCard label',{hasText:'Move $40.00 to savings'}).locator('input').isChecked());
+  const [d]=await Promise.all([page.waitForEvent('download'),page.click('#set-data [data-act=export]')]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(await d.path(),'utf8')).paychecks,[{date:'2026-10-02',amount:1250}]);
+  assert.deepEqual(dialogs,[]);
   await context.close();
 });

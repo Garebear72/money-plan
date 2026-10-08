@@ -52,6 +52,7 @@
 
   <!-- TODAY -->
   <section id="tab-today" class="tab" aria-label="Today" hidden>
+    <div id="payBanner"></div>
     <div class="card" id="weekCard"></div>
     <div id="cashWarn"></div>
 
@@ -93,11 +94,12 @@
     </div>
 
     <details class="card">
-      <summary>Weekly spending limit</summary>
+      <summary>Weekly spending target</summary>
       <div class="row">
         <label class="fld"><span id="weeklyLabel">Dollars per week</span><span class="money-in"><input id="weekly" type="text" inputmode="decimal"></span></label>
         <button class="btn" id="saveWeekly" type="button">Save</button>
       </div>
+      <p class="muted small" style="margin-top:10px">Your plan for a usual paycheck. When you enter a real paycheck, this week's limit grows or shrinks with it.</p>
     </details>
   </section>
 
