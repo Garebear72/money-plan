@@ -487,6 +487,189 @@ function cashProjection(plan,today,days){
   return {now:round2(now),low:round2(low),lowDate:lowDate,end:round2(bal),days:days};
 }
 
+/* ---------- per-paycheck plan ---------- */
+/* Splits time into pay periods (payday up to the day before the next one) and budgets each paycheck:
+   bills and rent due in the period, the savings move, and planned spending at the weekly limit. */
+function payPeriods(plan,today,count){
+  var s=plan.settings,t=sod(today),step=s.paycheck.everyDays,out=[];
+  var start=paydays(plan,addDays(t,-step+1),t)[0];
+  var spending=round2(s.weeklyLimit*step/7);
+  for(var i=0;i<count;i++){
+    var st=addDays(start,i*step),en=addDays(st,step-1),a=ds(st),b=ds(en);
+    var bills=billsBetween(plan,st,en).filter(function(x){return x.amount>0;});
+    var billTotal=round2(bills.reduce(function(sum,x){return sum+x.amount;},0));
+    var spent=round2(plan.purchases.reduce(function(sum,p){return p.date>=a&&p.date<=b?sum+p.amount:sum;},0));
+    out.push({start:st,end:en,pay:s.paycheck.amount,bills:bills,billTotal:billTotal,savings:s.savingsPerPayday,
+      spending:spending,spent:spent,current:st<=t&&t<=en,
+      left:round2(s.paycheck.amount-billTotal-s.savingsPerPayday-spending),keepForNext:0,carryIn:0});
+  }
+  /* if the next period comes up short, suggest holding back some of this one's surplus */
+  for(i=0;i<out.length;i++){
+    var p=out[i],avail=round2(p.left+p.carryIn);
+    if(i+1<out.length&&out[i+1].left<0&&avail>0){
+      p.keepForNext=round2(Math.min(avail,-out[i+1].left));
+      out[i+1].carryIn=p.keepForNext;
+    }
+    p.afterCarry=round2(p.left+p.carryIn);
+  }
+  return out;
+}
+
+/* ---------- bank CSV import ---------- */
+function parseCSV(text){
+  var rows=[],row=[],f='',q=false,i=0,c;
+  text=String(text).replace(/^﻿/,'');
+  for(;i<text.length;i++){
+    c=text[i];
+    if(q){
+      if(c==='"'){if(text[i+1]==='"'){f+='"';i++;}else q=false;}
+      else f+=c;
+    }else if(c==='"')q=true;
+    else if(c===','){row.push(f);f='';}
+    else if(c==='\n'||c==='\r'){
+      if(c==='\r'&&text[i+1]==='\n')i++;
+      row.push(f);f='';
+      if(row.some(function(x){return x.trim()!=='';}))rows.push(row);
+      row=[];
+    }else f+=c;
+  }
+  row.push(f);
+  if(row.some(function(x){return x.trim()!=='';}))rows.push(row);
+  return rows;
+}
+function csvDate(s){
+  s=String(s||'').trim();var m;
+  if((m=/^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s)))return new Date(+m[1],m[2]-1,+m[3]);
+  if((m=/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s))){var y=+m[3];if(y<100)y+=2000;return new Date(y,m[1]-1,+m[2]);}
+  return null;
+}
+function csvAmount(s){
+  s=String(s||'').trim();if(!s)return null;
+  var neg=/^\(.*\)$/.test(s)||/^-/.test(s)||/-$/.test(s);
+  var n=parseFloat(s.replace(/[()$,\s-]/g,''));
+  return isFinite(n)?(neg?-n:n):null;
+}
+/* Reads Chase checking or card activity CSVs, and most other banks' that have date, description and amount (or debit/credit) columns. */
+function readBankCsv(text){
+  var rows=parseCSV(text);
+  if(!rows.length)return {ok:false,errors:['The file is empty.']};
+  var head=rows[0].map(function(h){return h.trim().toLowerCase();});
+  var col=function(names){for(var i=0;i<names.length;i++){var k=head.indexOf(names[i]);if(k>=0)return k;}return -1;};
+  var iDate=col(['transaction date','trans. date','trans date','date','posting date','post date','posted date']);
+  var iDesc=col(['description','payee','merchant','name','details','memo']);
+  if(head[iDesc]==='details'&&col(['description'])>=0)iDesc=col(['description']);
+  var iAmt=col(['amount']),iDebit=col(['debit','withdrawal','withdrawals','debit amount']),iCredit=col(['credit','deposit','deposits','credit amount']);
+  var iType=col(['type']);
+  if(iDate<0||iDesc<0||(iAmt<0&&iDebit<0)){
+    return {ok:false,errors:['This doesn\'t look like a bank activity file. It needs Date, Description and Amount columns, but the first row has: '+rows[0].slice(0,8).map(function(h){return '"'+h.trim()+'"';}).join(', ')+'. On chase.com, download your account activity as a CSV file (not a PDF statement).']};
+  }
+  var txns=[],bad=0;
+  rows.slice(1).forEach(function(r){
+    var posted=csvDate(r[iDate]),desc=String(r[iDesc]||'').replace(/\s+/g,' ').trim(),amt;
+    if(iAmt>=0)amt=csvAmount(r[iAmt]);
+    else{var d=csvAmount(r[iDebit]),cr=csvAmount(r[iCredit]);amt=d?-Math.abs(d):cr?Math.abs(cr):null;}
+    if(!posted||!desc||amt==null||amt===0){bad++;return;}
+    /* card purchases often carry the real purchase date in the description, e.g. "... OH 10/06" */
+    var date=posted,m=/(?:^|\s)(\d{2})\/(\d{2})(?:\s|$)/.exec(desc);
+    if(m){
+      var cand=new Date(posted.getFullYear(),m[1]-1,+m[2]);
+      if(cand>posted)cand=new Date(posted.getFullYear()-1,m[1]-1,+m[2]);
+      var gap=dayDiff(cand,posted);if(gap>=0&&gap<=10)date=cand;
+    }
+    txns.push({date:ds(date),posted:ds(posted),desc:desc,amount:round2(Math.abs(amt)),out:amt<0,type:iType>=0?String(r[iType]||'').trim():''});
+  });
+  if(!txns.length)return {ok:false,errors:['No transactions could be read from this file'+(bad?' ('+bad+' rows had a missing date, description or amount).':'.')]};
+  return {ok:true,txns:txns,skippedRows:bad};
+}
+
+var STATES='AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'.split(' ');
+function titleCase(s){return s.toLowerCase().replace(/(^|[\s\-\/&])([a-z])/g,function(m,a,b){return a+b.toUpperCase();});}
+/* "POS DEBIT CORNER CAFE LLC SPRINGFIELD IL 10/05" -> "Corner Cafe" */
+function cleanMerchant(desc){
+  var s=' '+String(desc).toUpperCase().replace(/\s+/g,' ')+' ';
+  if(/AMAZON|AMZN/.test(s))return 'Amazon';
+  s=s.replace(/ (WEB ID|PPD ID|ID):.*$/,' ')
+     .replace(/^ (POS DEBIT|POS PURCHASE|DEBIT CARD PURCHASE|CARD PURCHASE|PURCHASE AUTHORIZED ON \d\d\/\d\d|RECURRING CARD PURCHASE|PAYPAL PURCHASE|PAYPAL \*|CHECKCARD \d*) /,' ')
+     .replace(/^ [A-Z]{2,5} ?\*/,' ')
+     .replace(/ \d{1,2}\/\d{1,2}(\/\d{2,4})? /g,' ')
+     .replace(/ [\d\-().]{7,} /g,' ')
+     .replace(/ #?\d{3,}\S* /g,' ');
+  var cut=/ (LLC|INC|CORP|CO|LTD)\b/.exec(s);
+  if(cut)s=s.slice(0,cut.index);
+  else{
+    var comma=s.indexOf(',')>0;
+    if(comma)s=s.slice(0,s.indexOf(','));
+    var w=s.trim().split(' ');
+    /* "SHOP NAME CITY, ST" or "SHOP NAME CITY ST": drop the state, then the city word */
+    if(comma){if(w.length>=3)w.pop();}
+    else if(w.length>=2&&STATES.indexOf(w[w.length-1])>=0){w.pop();if(w.length>=3)w.pop();}
+    s=w.join(' ');
+  }
+  s=s.replace(/[*#]+/g,' ').replace(/\s+/g,' ').trim();
+  return s?titleCase(s).slice(0,60):titleCase(String(desc).trim()).slice(0,60);
+}
+var CAT_RULES=[
+  ['food',/CAFE|COFFEE|STARBUCKS|DUNKIN|RESTAURANT|PIZZA|GRILL|DINER|MCDONALD|TACO|SUBWAY|WENDY|BURGER|CHIPOTLE|KITCHEN|BAKERY|HOMEMADE|DELI|DOORDASH|GRUBHUB|UBER ?EATS|CHICK|DOMINO|SONIC|ARBY|PANERA|BAR & |TAVERN|DONUT/],
+  ['gas',/SHELL|SPEEDWAY|MARATHON|SUNOCO|EXXON|MOBIL|CIRCLE K|CHEVRON|\bBP\b|CITGO|VALERO|FUEL|GAS ?STATION|SHEETZ|WAWA/],
+  ['groceries',/KROGER|MEIJER|ALDI|GROCERY|MARKET|FOOD ?LION|PUBLIX|SAFEWAY|WHOLE FOODS|TRADER JOE|SAVE A LOT|WALMART|COSTCO|SAM'?S CLUB/],
+  ['shopping',/AMAZON|AMZN|TARGET|EBAY|ETSY|BEST ?BUY|DOLLAR|WALGREENS|CVS|HOME DEPOT|LOWE'?S/],
+  ['fun',/STEAM|PLAYSTATION|NINTENDO|GAMES?\b|CINEMA|THEATER|THEATRE|SPOTIFY|TWITCH|AMC /],
+  ['tobacco',/TOBACCO|SMOKE|VAPE|CIGAR/]
+];
+function guessCategory(plan,note,desc){
+  var n=String(note||'').toLowerCase(),best=null;
+  plan.purchases.forEach(function(p){if(p.note&&p.note.toLowerCase()===n&&(!best||p.date>=best.date))best=p;});
+  if(best)return best.category;
+  var d=' '+String(desc||note).toUpperCase()+' ';
+  for(var i=0;i<CAT_RULES.length;i++)if(CAT_RULES[i][1].test(d))return CAT_RULES[i][0];
+  return 'other';
+}
+var GENERIC=/^(the|and|bill|payment|plan|premium|debt|management|insurance|credit|card|pass|service|car|loan|half|rent|for)$/i;
+/* For each money-out transaction: a suggested purchase, plus a reason to leave it unticked
+   (it's a bill, it's already logged, it's a transfer or a cash withdrawal). */
+function matchBankTxns(plan,txns){
+  var used={},out=[];
+  var outs=txns.filter(function(x){return x.out;}).sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;});
+  var purchases=plan.purchases.slice();
+  outs.forEach(function(x){
+    var d=pd(x.date),desc=' '+x.desc.toUpperCase()+' ',flag=null,reason='';
+    var near=billsBetween(plan,addDays(d,-4),addDays(d,4));
+    var bill=near.filter(function(b){return Math.abs(b.amount-x.amount)<0.005;})[0];
+    if(!bill)bill=near.filter(function(b){
+      var words=b.name.split(/[^A-Za-z]+/).filter(function(w){return w.length>=4&&!GENERIC.test(w);});
+      return words.some(function(w){return desc.indexOf(' '+w.toUpperCase())>=0;})&&Math.abs(b.amount-x.amount)<=b.amount*0.25;
+    })[0];
+    if(bill){flag='bill';reason='Bill: '+bill.name;}
+    if(!flag){
+      var best=-1,bestGap=99;
+      purchases.forEach(function(p,i){
+        if(used[i]||Math.abs(p.amount-x.amount)>=0.005)return;
+        var g=Math.abs(dayDiff(pd(p.date),d));
+        if(g<=3&&g<bestGap){best=i;bestGap=g;}
+      });
+      if(best>=0){used[best]=1;flag='logged';reason='Already logged'+(purchases[best].note?': '+purchases[best].note:'');}
+    }
+    if(!flag&&/ATM|CASH WITHDRAWAL|WITHDRAWAL CASH/.test(desc)){flag='cash';reason='Cash withdrawal';}
+    if(!flag&&(/ZELLE|TRANSFER|XFER|VENMO|CASH APP|PAYMENT THANK YOU|ONLINE PAYMENT|AUTOPAY|E-PAYMENT|EPAY/.test(desc)||/TRANSFER|XFER|LOAN_PMT/i.test(x.type))){flag='transfer';reason='Transfer or payment';}
+    var note=cleanMerchant(x.desc);
+    out.push({txn:x,note:note,category:guessCategory(plan,note,x.desc),flag:flag,reason:reason,pick:!flag});
+  });
+  return out;
+}
+
+/* ---------- quick-add repeats ---------- */
+function frequentPurchases(plan,today,max){
+  var since=ds(addDays(sod(today),-90)),g={};
+  plan.purchases.forEach(function(p){
+    if(p.date<since)return;
+    var k=(p.note||'').toLowerCase()+'|'+p.category+'|'+p.amount.toFixed(2);
+    var e=g[k]||(g[k]={note:p.note,category:p.category,amount:p.amount,count:0,last:''});
+    e.count++;if(p.date>e.last)e.last=p.date;
+  });
+  return Object.keys(g).map(function(k){return g[k];}).filter(function(e){return e.count>=2;})
+    .sort(function(a,b){return (b.count-a.count)||(a.last<b.last?1:-1);}).slice(0,max||6);
+}
+
 var fmtMoney=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
 function money(n){return fmtMoney.format(round2(n));}
 
@@ -496,6 +679,8 @@ return {
   Ctx:Ctx,parsePlan:parsePlan,normalizePlan:normalizePlan,exportPlan:exportPlan,
   normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,
   paydays:paydays,billOccurrences:billOccurrences,rentOccurrences:rentOccurrences,billsBetween:billsBetween,totalBetween:totalBetween,
-  weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection
+  weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection,
+  payPeriods:payPeriods,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
+  matchBankTxns:matchBankTxns,frequentPurchases:frequentPurchases
 };
 });

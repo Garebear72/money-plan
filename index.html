@@ -57,6 +57,7 @@
 
     <form class="card" id="addForm" autocomplete="off">
       <h2>Log a purchase</h2>
+      <div id="quick"></div>
       <div class="row">
         <label class="fld" style="flex-basis:120px"><span>Amount</span><span class="money-in"><input id="pAmt" type="text" inputmode="decimal" placeholder="0.00" aria-label="Amount in dollars"></span></label>
         <label class="fld" style="flex-basis:170px"><span>What for</span><input id="pNote" type="text" maxlength="60" placeholder="Optional"></label>
@@ -67,6 +68,18 @@
         <button class="btn primary" type="submit" style="flex:1 1 120px">Add purchase</button>
       </div>
     </form>
+
+    <details class="card" id="bankCard">
+      <summary>Import purchases from your bank</summary>
+      <p class="small">Add many purchases at once from your bank's activity file (CSV). The file is read on this device and never uploaded.</p>
+      <ol class="steps small">
+        <li>On <b>chase.com</b> in a web browser (the Chase app can't export), open your checking account and tap the <b>download</b> icon above your transactions. If the site keeps sending you to the app, turn on <b>Desktop site</b> in the browser menu.</li>
+        <li>Pick a date range, choose <b>CSV</b>, and download.</li>
+        <li>Choose that file below. Bills, transfers and purchases you've already logged are left unticked.</li>
+      </ol>
+      <label class="fld wide" style="margin-top:12px"><span>Bank activity file (.csv)</span><input type="file" id="bankFile" accept=".csv,text/csv,text/plain,application/vnd.ms-excel"></label>
+      <div id="bankResult" aria-live="polite"></div>
+    </details>
 
     <div class="card">
       <h2>Next up</h2>

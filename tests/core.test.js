@@ -106,3 +106,80 @@ test('warnings for broken debt links and percent-style APR',()=>{
   assert.match(r.warnings.join(' '),/no bill has that exact name/);
   assert.equal(r.plan.debts[1].apr,0.08);
 });
+
+/* ---------- paycheck plan ---------- */
+test('pay periods: bills, savings and spending per paycheck',()=>{
+  const ps=C.payPeriods(plan(),D('2026-10-07'),4);
+  assert.deepEqual(ps.map(p=>[C.ds(p.start),C.ds(p.end),p.billTotal,p.left]),[
+    ['2026-10-02','2026-10-15',100,780],   // 1200 - 100 bills - 40 savings - 280 spending
+    ['2026-10-16','2026-10-29',665,215],
+    ['2026-10-30','2026-11-12',470,410],
+    ['2026-11-13','2026-11-26',705,175]]);
+  assert.equal(ps[0].current,true);assert.equal(ps[0].spent,42);assert.equal(ps[0].spending,280);
+});
+test('pay periods: a short period asks the one before to hold money back',()=>{
+  const p=plan();p.settings.paycheck.amount=800;
+  const ps=C.payPeriods(p,D('2026-10-07'),3);
+  assert.equal(ps[1].left,-185);
+  assert.equal(ps[0].keepForNext,185);assert.equal(ps[1].carryIn,185);assert.equal(ps[1].afterCarry,0);
+  p.settings.paycheck.amount=700;
+  const qs=C.payPeriods(p,D('2026-10-07'),3);
+  assert.equal(qs[1].left,-285);assert.equal(qs[0].keepForNext,280);assert.equal(qs[1].afterCarry,-5);
+});
+
+/* ---------- bank CSV ---------- */
+const CSV=fs.readFileSync(path.join(__dirname,'fixtures','chase-checking-example.csv'),'utf8');
+test('reads a Chase checking CSV, using the purchase date from the description',()=>{
+  const r=C.readBankCsv(CSV);
+  assert.ok(r.ok);assert.equal(r.txns.length,9);
+  const bakery=r.txns.find(t=>/BAKERY/.test(t.desc));
+  assert.equal(bakery.date,'2026-10-06');assert.equal(bakery.posted,'2026-10-07');assert.equal(bakery.amount,6);assert.equal(bakery.out,true);
+  assert.equal(r.txns.filter(t=>!t.out).length,1);
+});
+test('reads a card CSV with transaction dates, and rejects files that are not activity exports',()=>{
+  const r=C.readBankCsv('Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n10/05/2026,10/06/2026,GAS N GO #1234,Gas,Sale,-35.50,\n10/04/2026,10/05/2026,Payment Thank You-Mobile,,Payment,200.00,\n');
+  assert.ok(r.ok);assert.deepEqual(r.txns.filter(t=>t.out).map(t=>[t.date,t.amount,C.cleanMerchant(t.desc)]),[['2026-10-05',35.5,'Gas N Go']]);
+  const bad=C.readBankCsv('Name,Value\nx,1\n');
+  assert.equal(bad.ok,false);assert.match(bad.errors[0],/needs Date, Description and Amount/);
+  assert.equal(C.readBankCsv('').ok,false);
+  const dc=C.readBankCsv('Date,Description,Debit,Credit\n2026-10-03,"Shop, The",12.50,\n2026-10-04,Pay,,500\n');
+  assert.deepEqual(dc.txns.map(t=>[t.amount,t.out,t.desc]),[[12.5,true,'Shop, The'],[500,false,'Pay']]);
+});
+test('cleans merchant names',()=>{
+  const cases={
+    'POS DEBIT CORNER CAFE LLC SPRINGFIELD IL':'Corner Cafe',
+    'SQ *MAPLE BAKERY SPRINGFIELD IL 10/06':'Maple Bakery',
+    'PAYPAL PURCHASE MUSIC STORE WEB ID: PAYPALSI00':'Music Store',
+    'FUEL STOP SPRINGFIELD, IL 10/05':'Fuel Stop',
+    'TST* BIG GRILL 555-123-4567 OH 10/01':'Big Grill',
+    'AMAZON MKTPL*AB12CD Amzn.com/bill WA':'Amazon',
+    'GAS N GO #1234':'Gas N Go'
+  };
+  for(const [raw,want] of Object.entries(cases))assert.equal(C.cleanMerchant(raw),want,raw);
+});
+test('bank matching: skips bills, already-logged purchases, transfers and cash',()=>{
+  const p=plan(),rows=C.matchBankTxns(p,C.readBankCsv(CSV).txns);
+  assert.equal(rows.length,8);
+  const by=n=>rows.find(r=>r.note===n);
+  assert.equal(by('Corner Cafe').pick,true);assert.equal(by('Corner Cafe').category,'food');
+  assert.equal(by('Maple Bakery').category,'food');
+  assert.equal(by('Fuel Stop').flag,'logged');
+  assert.equal(rows.find(r=>/VERIZON/.test(r.txn.desc)).flag,'bill');
+  assert.match(rows.find(r=>/VERIZON/.test(r.txn.desc)).reason,/Bill: Phone/);
+  assert.equal(rows.find(r=>/Zelle/.test(r.txn.desc)).flag,'transfer');
+  assert.equal(rows.find(r=>/ATM/.test(r.txn.desc)).flag,'cash');
+  assert.equal(rows.filter(r=>r.pick).length,4);
+  /* once added, the same file finds nothing new */
+  rows.filter(r=>r.pick).forEach((r,i)=>p.purchases.push({id:'b'+i,amount:r.txn.amount,note:r.note,category:r.category,date:r.txn.date,ts:i}));
+  assert.equal(C.matchBankTxns(p,C.readBankCsv(CSV).txns).filter(r=>r.pick).length,0);
+});
+test('category guess prefers your own past choice',()=>{
+  const p=plan();p.purchases.push({id:'x',amount:3,note:'Corner Cafe',category:'fun',date:'2026-10-01',ts:1});
+  assert.equal(C.guessCategory(p,'Corner Cafe','POS DEBIT CORNER CAFE LLC'),'fun');
+});
+test('quick add lists purchases you repeat',()=>{
+  const p=plan();
+  for(let i=0;i<3;i++)p.purchases.push({id:'q'+i,amount:4,note:'Corner Cafe',category:'food',date:'2026-10-0'+(i+1),ts:i});
+  const f=C.frequentPurchases(p,D('2026-10-07'),6);
+  assert.deepEqual(f.map(x=>[x.note,x.amount,x.count]),[['Corner Cafe',4,3]]);
+});

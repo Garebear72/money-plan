@@ -22,7 +22,7 @@ var COLL={bill:'bills',debt:'debts',purchase:'purchases',ledger:'partnerLedger'}
 var NORM={bill:C.normBill,debt:C.normDebt,purchase:C.normPurchase,ledger:C.normLedger};
 
 var plan=null,storageOK=true,loadError='';
-var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false};
+var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,period:0,quick:[],checks:{}};
 var imp={result:null,confirming:false};
 
 /* ---------- storage: every call guarded ---------- */
@@ -55,19 +55,29 @@ function requestPersist(){
 }
 
 /* Apply a change to a copy, save it, then show it. A failed save leaves everything as it was. */
-function commit(mutate,okMsg){
-  var next=C.clone(plan),err=mutate(next);
+function commit(mutate,okMsg,undoable){
+  var prev=plan,next=C.clone(plan),err=mutate(next);
   if(err){toast(err);return false;}
   if(!persist(next)){toast('Couldn\'t save. Storage may be full or blocked by the browser, so the change was not kept.');return false;}
   plan=next;ui.editing=null;renderAll();
-  if(okMsg)toast(okMsg);
+  if(okMsg)toast(okMsg,undoable?function(){
+    if(!persist(prev)){toast('Couldn\'t undo. Storage is blocked.');return;}
+    plan=prev;ui.editing=null;renderAll();toast('Undone');
+  }:null);
   return true;
 }
 
 /* ---------- small helpers ---------- */
-function toast(msg){
-  var t=$('#toast');t.textContent=msg;t.classList.add('show');
-  clearTimeout(toast.t);toast.t=setTimeout(function(){t.classList.remove('show');},3200);
+function toast(msg,undo){
+  var t=$('#toast');t.textContent='';
+  var s=document.createElement('span');s.textContent=msg;t.appendChild(s);
+  if(undo){
+    var b=document.createElement('button');b.type='button';b.className='toast-btn';b.textContent='Undo';
+    b.addEventListener('click',function(){clearTimeout(toast.t);t.classList.remove('show','act');undo();});
+    t.appendChild(b);
+  }
+  t.classList.toggle('act',!!undo);t.classList.add('show');
+  clearTimeout(toast.t);toast.t=setTimeout(function(){t.classList.remove('show','act');},undo?7000:3200);
 }
 function parseAmount(v,allowZero){
   var n=parseFloat(String(v).replace(/[$,\s]/g,''));
@@ -225,6 +235,140 @@ function renderChips(){
   box.innerHTML=l.map(function(c){return '<button type="button" class="chip" data-cat="'+esc(c[0])+'" aria-pressed="'+(c[0]===ui.selCat)+'">'+esc(c[1])+'</button>';}).join('');
 }
 
+/* ---------- Paycheck plan ---------- */
+var CHECK_KEY='money-plan:checklist';
+function loadChecks(){
+  var o={};
+  try{o=JSON.parse(storageGet(CHECK_KEY)||'{}')||{};}catch(e){o={};}
+  var cutoff=ds(addDays(new Date(),-60));
+  Object.keys(o).forEach(function(k){if(k.slice(0,10)<cutoff)delete o[k];});
+  return o;
+}
+function renderPlan(t){
+  var s=plan.settings,el=$('#paydayCard'),periods=C.payPeriods(plan,t,4);
+  if(ui.period>=periods.length)ui.period=0;
+  var p=periods[ui.period],next=periods[ui.period+1],prev=periods[ui.period-1];
+  var step=s.paycheck.everyDays,weeks=step%7===0?plural(step/7,'week'):plural(step,'day');
+  var h='<div class="card"><h2>Paycheck plan</h2>';
+  var np=periods[periods[0].start<t?1:0];
+  if(np){var n=dayDiff(t,np.start);h+='<p><b>'+(n===0?'Payday is today.':'Next payday: '+esc(wd(np.start))+' ('+inDays(n).toLowerCase()+').')+'</b></p>';}
+  h+='<div class="chips" role="group" aria-label="Pay period">'+periods.map(function(x,i){
+    return '<button type="button" class="chip" data-act="period" data-i="'+i+'" aria-pressed="'+(i===ui.period)+'">'+esc(fMD.format(x.start))+(x.current?' · now':'')+'</button>';
+  }).join('')+'</div>';
+  h+='<p class="muted small" style="margin-bottom:6px">Paid '+esc(wd(p.start))+'. Covers '+esc(fMD.format(p.start))+' to '+esc(fMD.format(p.end))+'.</p>';
+  h+='<div class="kv"><span>Paycheck</span><b class="in">+'+money(p.pay)+'</b></div>';
+  h+='<details class="sub"><summary><span>Bills and rent ('+p.bills.length+')</span><b>−'+money(p.billTotal)+'</b></summary><ul class="list">'+
+    p.bills.map(function(b){return '<li class="kv"><span>'+esc(fMD.format(b.date))+' · '+esc(b.name)+'</span><b>'+money(b.amount)+'</b></li>';}).join('')+'</ul></details>';
+  if(p.savings>0)h+='<div class="kv"><span>To savings</span><b>−'+money(p.savings)+'</b></div>';
+  h+='<div class="kv"><span>Spending ('+weeks+' at '+money(s.weeklyLimit)+' a week)</span><b>−'+money(p.spending)+'</b></div>';
+  if(p.current||p.spent)h+='<div class="kv muted"><span>Spent so far this period</span><b>'+money(p.spent)+'</b></div>';
+  h+='<div class="kv total"><span>'+(p.left<0?'Short by':'Left over')+'</span><b>'+money(Math.abs(p.left))+'</b></div>';
+  var msg,cls='';
+  if(p.left<0){
+    if(p.carryIn>0&&p.afterCarry<0){cls='bad';msg='With '+money(p.carryIn)+' kept from the '+fMD.format(prev.start)+' paycheck, it\'s still '+money(-p.afterCarry)+' short. Spend less this period, or let your checking balance cover it.';}
+    else if(p.carryIn>0){cls='warn';msg='Covered by the '+money(p.carryIn)+' kept from the '+fMD.format(prev.start)+' paycheck.';}
+    else{cls='bad';msg='This paycheck doesn\'t cover the period. Spend less, or let your checking balance cover the '+money(-p.left)+'.';}
+  }else if(p.keepForNext>0){
+    cls='warn';msg='Keep '+money(p.keepForNext)+' of this paycheck: the '+fMD.format(next.start)+' period is '+money(-next.left)+' short.';
+  }else msg='Covers everything'+(p.left>0?' with '+money(p.left)+' to spare.':'.');
+  h+='<span class="status'+(cls?' '+cls:'')+'">'+esc(msg)+'</span>';
+
+  /* payday checklist, remembered on this device */
+  var items=[];
+  if(p.savings>0)items.push(['sav','Move '+money(p.savings)+' to savings']);
+  p.bills.forEach(function(b,i){if(b.kind==='rent'&&dayDiff(p.start,b.date)===0)items.push(['rent'+i,'Pay '+b.name.charAt(0).toLowerCase()+b.name.slice(1)+': '+money(b.amount)]);});
+  if(p.keepForNext>0)items.push(['keep','Leave '+money(p.keepForNext)+' in checking for the '+fMD.format(next.start)+' period']);
+  if(items.length){
+    var key=ds(p.start);
+    h+='<p class="small" style="margin-top:14px"><b>On payday</b></p>'+items.map(function(it){
+      var k=key+'|'+it[0];
+      return '<label class="check"><input type="checkbox" data-check="'+esc(k)+'"'+(ui.checks[k]?' checked':'')+'><span>'+esc(it[1])+'</span></label>';
+    }).join('');
+  }
+  el.innerHTML=h+'</div>';
+}
+
+/* ---------- quick add ---------- */
+function renderQuick(){
+  ui.quick=C.frequentPurchases(plan,new Date(),6);
+  $('#quick').innerHTML=ui.quick.length?'<p class="muted small" style="margin-bottom:6px">Quick add (one tap):</p><div class="chips" style="margin-top:0">'+
+    ui.quick.map(function(q,i){return '<button type="button" class="chip" data-act="quick" data-i="'+i+'">'+esc(q.note||catLabel(q.category))+' · '+money(q.amount)+'</button>';}).join('')+'</div>':'';
+}
+function quickAdd(i){
+  var q=ui.quick[i];if(!q)return;
+  var rec={id:C.uid(),amount:q.amount,note:q.note,category:q.category,date:$('#pDate').value||ds(new Date()),ts:Date.now()};
+  commit(function(p){p.purchases.push(rec);},'Added '+(q.note||catLabel(q.category))+' '+money(q.amount),true);
+}
+
+/* ---------- bank import ---------- */
+var bank={rows:null,error:'',range:''};
+function renderBank(){
+  var el=$('#bankResult');
+  if(bank.error){el.innerHTML='<span class="status bad" style="margin-top:12px">'+esc(bank.error)+'</span>';return;}
+  if(!bank.rows){el.innerHTML='';return;}
+  if(!bank.rows.length){el.innerHTML='<span class="status" style="margin-top:12px">No money-out transactions in that file.</span>';return;}
+  var counts={};bank.rows.forEach(function(r){if(r.flag)counts[r.flag]=(counts[r.flag]||0)+1;});
+  var why=[['bill','bill'],['logged','already logged','already logged'],['transfer','transfer'],['cash','cash withdrawal']].filter(function(x){return counts[x[0]];})
+    .map(function(x){return plural(counts[x[0]],x[1],x[2]);});
+  var h='<p class="small" style="margin-top:14px">Found '+plural(bank.rows.length,'payment')+' '+esc(bank.range)+'.'+(why.length?' Left unticked: '+esc(why.join(', '))+'.':'')+' Check the names and categories, then add.</p>';
+  h+='<div class="row" style="margin-top:8px"><button class="btn small" type="button" data-act="bank-all">Tick all</button><button class="btn small" type="button" data-act="bank-none">Untick all</button></div>';
+  h+='<ul class="list txns">'+bank.rows.map(function(r,i){
+    var cats=catList();if(!cats.some(function(c){return c[0]===r.category;}))cats.splice(cats.length-1,0,[r.category,cap(r.category)]);
+    return '<li class="txn'+(r.flag?' flagged':'')+'" data-i="'+i+'">'+
+      '<input type="checkbox" data-bank="pick" aria-label="Add this purchase"'+(r.pick?' checked':'')+'>'+
+      '<div class="txn-main"><input type="text" data-bank="note" maxlength="60" value="'+esc(r.note)+'" aria-label="Name">'+
+        '<div class="s">'+esc(wd(pd(r.txn.date)))+' · <select data-bank="category" aria-label="Category">'+cats.map(function(c){return '<option value="'+esc(c[0])+'"'+(c[0]===r.category?' selected':'')+'>'+esc(c[1])+'</option>';}).join('')+'</select>'+
+        (r.reason?' <span class="tag">'+esc(r.reason)+'</span>':'')+'</div>'+
+        '<div class="s raw">'+esc(r.txn.desc)+'</div></div>'+
+      '<span class="a">'+money(r.txn.amount)+'</span></li>';
+  }).join('')+'</ul>';
+  h+='<div class="row" style="margin-top:12px"><button class="btn primary" type="button" data-act="bank-add" id="bankAdd" style="flex:1 1 170px"></button><button class="btn" type="button" data-act="bank-cancel">Cancel</button></div>';
+  el.innerHTML=h;
+  bankCount();
+}
+function bankCount(){
+  var n=0,sum=0;
+  document.querySelectorAll('#bankResult .txn').forEach(function(li){
+    var r=bank.rows[+li.getAttribute('data-i')];r.pick=li.querySelector('[data-bank=pick]').checked;
+    if(r.pick){n++;sum+=r.txn.amount;}
+  });
+  var b=$('#bankAdd');if(!b)return;
+  b.textContent=n?'Add '+plural(n,'purchase')+' ('+money(sum)+')':'Nothing ticked';
+  b.disabled=!n;
+}
+function bankAdd(){
+  var recs=[],t0=Date.now();
+  document.querySelectorAll('#bankResult .txn').forEach(function(li,k){
+    var r=bank.rows[+li.getAttribute('data-i')];
+    if(!li.querySelector('[data-bank=pick]').checked)return;
+    var note=li.querySelector('[data-bank=note]').value.trim().slice(0,60)||r.note;
+    recs.push({id:C.uid(),amount:r.txn.amount,note:note,category:li.querySelector('[data-bank=category]').value,date:r.txn.date,ts:t0+k});
+  });
+  if(!recs.length)return;
+  if(commit(function(p){p.purchases=p.purchases.concat(recs);},'Added '+plural(recs.length,'purchase')+' from your bank file',true)){
+    bank={rows:null,error:'',range:''};
+    try{$('#bankFile').value='';}catch(e){}
+    renderBank();
+    $('#bankCard').open=false;
+  }
+}
+function readBankFile(f){
+  bank={rows:null,error:'',range:''};
+  renderBank();
+  if(f.size>5*1024*1024){bank.error='That file is too big for a bank activity export. Choose a shorter date range.';renderBank();return;}
+  var r=new FileReader();
+  r.onload=function(){
+    var res=C.readBankCsv(String(r.result||''));
+    if(!res.ok){bank.error=res.errors[0];renderBank();return;}
+    bank.rows=C.matchBankTxns(plan,res.txns);
+    var dates=res.txns.map(function(x){return x.date;}).sort();
+    bank.range=dates.length?'from '+fMD.format(pd(dates[0]))+' to '+fMD.format(pd(dates[dates.length-1])):'';
+    renderBank();
+  };
+  r.onerror=function(){bank.error='Couldn\'t read that file. Try choosing it again.';renderBank();};
+  r.readAsText(f);
+}
+
 /* ---------- Bills ---------- */
 function renderBills(){
   var s=plan.settings,t=sod(new Date()),end=addDays(t,45);
@@ -238,13 +382,7 @@ function renderBills(){
   bills.forEach(function(b){var n=dayDiff(t,b.date);if(n<=6)week+=b.amount;if(n<=29)month+=b.amount;});
   var np=pays[0];
 
-  /* payday reminder */
-  var pc=$('#paydayCard');
-  if(np&&save>0){
-    var n=dayDiff(t,np.date);
-    pc.innerHTML='<div class="card"><h2>Payday reminder</h2><p><b>'+(n===0?'Payday is today':'Next payday: '+esc(wd(np.date))+' ('+inDays(n).toLowerCase()+')')+'.</b></p>'+
-      '<span class="status">Move '+money(save)+' to savings'+(n===0?' today.':' when it lands.')+'</span></div>';
-  }else pc.innerHTML='';
+  renderPlan(t);
 
   $('#billsSummary').innerHTML=
     '<h2>Coming due</h2><div class="big">'+money(week)+'</div><p class="muted small">due in the next 7 days</p>'+
@@ -554,7 +692,7 @@ function renderAll(){
   }
   $('#tab-welcome').hidden=true;
   $('#settingsImport').appendChild($('#importer'));
-  renderChips();renderWeek();renderCashWarn();renderRecent();renderNext();renderBills();renderDebts();renderPartner();renderSettings();renderImport();
+  renderChips();renderQuick();renderWeek();renderCashWarn();renderRecent();renderNext();renderBills();renderDebts();renderPartner();renderSettings();renderImport();
   syncInputs();
   showTab(ui.tab,true);
 }
@@ -608,7 +746,7 @@ function deleteRecord(kind,id){
   commit(function(p){
     p[coll]=p[coll].filter(function(x){if(x.id===id)name=x.name;return x.id!==id;});
     if(kind==='bill')linked=p.debts.filter(function(d){return d.billName===name;}).length;
-  },'Removed');
+  },'Removed',true);
   if(linked)toast('Removed. '+plural(linked,'debt')+' still point to "'+name+'"; edit '+(linked===1?'it':'them')+' on the Settings tab.');
 }
 function saveSection(id){
@@ -633,7 +771,7 @@ $('#addForm').addEventListener('submit',function(e){
   if(!amt){toast('Enter an amount greater than zero.');$('#pAmt').focus();return;}
   var date=$('#pDate').value||ds(new Date());
   var rec={id:C.uid(),amount:amt,note:$('#pNote').value.trim().slice(0,60),category:ui.selCat,date:date,ts:Date.now()};
-  if(commit(function(p){p.purchases.push(rec);},'Added '+money(amt))){
+  if(commit(function(p){p.purchases.push(rec);},'Added '+money(amt),true)){
     $('#pAmt').value='';$('#pNote').value='';$('#pDate').value=ds(new Date());$('#pAmt').focus();
   }
 });
@@ -641,7 +779,7 @@ function parAdd(type){
   var amt=parseAmount($('#cAmt').value);
   if(!amt){toast('Enter an amount greater than zero.');$('#cAmt').focus();return;}
   var rec={id:C.uid(),type:type,amount:amt,note:$('#cNote').value.trim().slice(0,60),date:$('#cDate').value||ds(new Date()),ts:Date.now()};
-  if(commit(function(p){p.partnerLedger.push(rec);},type==='payment'?'Logged '+money(amt)+' paid to '+label():'Added '+money(amt)+' to what you owe')){
+  if(commit(function(p){p.partnerLedger.push(rec);},type==='payment'?'Logged '+money(amt)+' paid to '+label():'Added '+money(amt)+' to what you owe',true)){
     $('#cAmt').value='';$('#cNote').value='';$('#cDate').value=ds(new Date());
   }
 }
@@ -666,7 +804,7 @@ $('#saveSetBal').addEventListener('click',function(){
   var cur=C.partnerData(plan,new Date()).bal,diff=round2(v-cur);
   if(Math.abs(diff)<0.005){toast('The balance is already '+money(v)+'.');return;}
   var rec={id:C.uid(),type:diff>0?'charge':'payment',amount:Math.abs(diff),date:ds(new Date()),note:'Balance adjustment',ts:Date.now()};
-  if(commit(function(p){p.partnerLedger.push(rec);},'Balance set to '+money(v)))$('#setBal').value='';
+  if(commit(function(p){p.partnerLedger.push(rec);},'Balance set to '+money(v),true))$('#setBal').value='';
 });
 
 /* import controls */
@@ -680,6 +818,15 @@ $('#impFile').addEventListener('change',function(){
   r.onload=function(){$('#impText').value=String(r.result||'');validateImport();};
   r.onerror=function(){imp.result={ok:false,errors:['Couldn\'t read that file. Try choosing it again, or open it and paste the text instead.'],warnings:[]};renderImport();};
   r.readAsText(f);
+});
+
+$('#bankFile').addEventListener('change',function(){var f=this.files&&this.files[0];if(f)readBankFile(f);});
+$('#bankResult').addEventListener('change',function(e){if(e.target.matches('[data-bank=pick]'))bankCount();});
+document.addEventListener('change',function(e){
+  var c=e.target.closest('[data-check]');if(!c)return;
+  var k=c.getAttribute('data-check');
+  if(c.checked)ui.checks[k]=true;else delete ui.checks[k];
+  if(!storageSet(CHECK_KEY,JSON.stringify(ui.checks)))toast('Couldn\'t save the checklist. Storage is blocked.');
 });
 
 /* one delegated handler for every data-act button */
@@ -712,9 +859,15 @@ document.addEventListener('click',function(e){
       deleteRecord(kind,id);break;
     case 'pause':
       var bill=plan.bills.filter(function(x){return x.id===id;})[0];
-      if(bill)commit(function(p){p.bills.forEach(function(x){if(x.id===id)x.active=!x.active;});},(bill.active?'Paused ':'Resumed ')+bill.name);
+      if(bill)commit(function(p){p.bills.forEach(function(x){if(x.id===id)x.active=!x.active;});},(bill.active?'Paused ':'Resumed ')+bill.name,true);
       break;
     case 'toggle-all':ui.showAll=!ui.showAll;renderRecent();break;
+    case 'quick':quickAdd(+b.getAttribute('data-i'));break;
+    case 'period':ui.period=+b.getAttribute('data-i');renderPlan(sod(new Date()));break;
+    case 'bank-all':case 'bank-none':
+      document.querySelectorAll('#bankResult [data-bank=pick]').forEach(function(c){c.checked=act==='bank-all';});bankCount();break;
+    case 'bank-add':bankAdd();break;
+    case 'bank-cancel':bank={rows:null,error:'',range:''};try{$('#bankFile').value='';}catch(err){}renderBank();break;
     case 'save-sec':saveSection(b.getAttribute('data-sec'));break;
     case 'add-row':
       var box=b.closest('[data-sec]').querySelector('[data-rows]');
@@ -739,7 +892,7 @@ document.addEventListener('click',function(e){
     case 'confirm-reset':
       if(!storageRemove(KEY)){toast('Couldn\'t delete the saved data. The browser blocked it.');return;}
       storageRemove(TAB_KEY);
-      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false};imp={result:null,confirming:false};
+      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,period:0,quick:[],checks:{}};storageRemove(CHECK_KEY);bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
       renderAll();window.scrollTo(0,0);toast('Everything was deleted from this device.');
       break;
   }
@@ -760,6 +913,7 @@ window.addEventListener('storage',function(e){
 /* ---------- start ---------- */
 storageOK=checkStorage();
 plan=load();
+ui.checks=loadChecks();
 ui.tab=storageGet(TAB_KEY)||'today';
 setDefaultDates();
 renderAll();

@@ -10,7 +10,16 @@ A small, installable budgeting app (PWA) that runs entirely on your phone.
 
 1. Open the site in Chrome on Android and choose **Add to Home screen** / **Install app**.
 2. On first launch, choose your plan file or paste its JSON, tap **Validate**, check the summary, then tap **Import**.
-3. Back up any time from **Settings → Export plan file** (or **Copy as text**). Importing that file restores everything exactly.
+3. Log purchases by hand, with one tap for ones you repeat, or import them in bulk from your bank (see below).
+4. Back up any time from **Settings → Export plan file** (or **Copy as text**). Importing that file restores everything exactly.
+
+## Importing purchases from your bank
+
+Today → **Import purchases from your bank** reads a bank activity CSV on the device. Nothing is uploaded. It works with Chase checking and card exports, and with most banks whose file has date, description and amount (or debit/credit) columns. Each money-out row is shown with a cleaned-up name and a guessed category. It's left unticked if it matches a bill, a purchase you've already logged (same amount within 3 days), a transfer or Zelle payment, or a cash withdrawal. Re-importing an overlapping date range doesn't create duplicates.
+
+## Paycheck plan
+
+The Bills tab budgets each paycheck: bills and rent due before the next payday, the savings move, and spending at your weekly limit. If a later period comes up short, it tells you how much of an earlier paycheck to keep in checking. Each payday has a checklist (savings move, rent half, buffer) that's remembered on the device.
 
 ## Plan file format
 

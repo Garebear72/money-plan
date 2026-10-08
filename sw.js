@@ -2,7 +2,7 @@
    Caches only the app's own files so it opens offline. It never reads, stores or sends your plan:
    your data lives in the page's localStorage, which a service worker cannot see.
    Bump VERSION whenever any file in SHELL changes so phones pick up the update. */
-var VERSION='money-plan-v2';
+var VERSION='money-plan-v3';
 var SHELL=[
   './','index.html','app.css','core.js','app.js','manifest.webmanifest',
   'icons/icon-192.png','icons/icon-512.png','icons/icon-maskable-192.png','icons/icon-maskable-512.png',

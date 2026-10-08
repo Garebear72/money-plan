@@ -165,3 +165,70 @@ test('works offline after the first load and makes no outside requests',async()=
   assert.deepEqual(requests.filter(u=>!u.startsWith(origin)&&!u.startsWith('blob:')&&!u.startsWith('data:')),[]);
   await context.close();
 });
+
+const CSV=path.join(__dirname,'fixtures','chase-checking-example.csv');
+async function loadBank(page,file){
+  await page.setInputFiles('#bankFile',file);
+  await page.waitForFunction(()=>document.querySelector('#bankResult').textContent.trim()!=='');
+}
+test('bank CSV import: review, add, undo, and no duplicates on re-import',async()=>{
+  const {page,context,errors}=await open(env);
+  await importFile(page,SAMPLE);
+  await page.click('#bankCard summary');
+  await loadBank(page,CSV);
+  assert.match(await txt(page,'#bankResult'),/Found 8 payments from Oct 2 to Oct 7\. Left unticked: 1 bill, 1 already logged, 1 transfer, 1 cash withdrawal/);
+  assert.equal(await txt(page,'#bankAdd'),'Add 4 purchases ($25.00)');
+  /* rename one and untick another before adding */
+  const music=page.locator('#bankResult .txn',{hasText:'MUSIC STORE'});
+  await music.locator('[data-bank=pick]').uncheck();
+  assert.equal(await txt(page,'#bankAdd'),'Add 3 purchases ($14.00)');
+  await page.locator('#bankResult .txn',{hasText:'MAPLE BAKERY'}).locator('[data-bank=note]').fill('Bakery treat');
+  await page.click('#bankAdd');
+  assert.match(await txt(page,'#weekCard'),/\$88\.00/);          // 140 - (42 + 4 + 6); the Oct 2 cafe is last week
+  assert.match(await txt(page,'#recent'),/Bakery treat/);
+  await page.locator('#toast .toast-btn').click();               // undo
+  assert.match(await txt(page,'#weekCard'),/\$98\.00/);
+  /* add all four this time, then the same file has nothing new */
+  await page.click('#bankCard summary');
+  await loadBank(page,CSV);
+  await page.click('#bankAdd');
+  await page.click('#bankCard summary');
+  await loadBank(page,CSV);
+  assert.match(await txt(page,'#bankResult'),/1 bill, 5 already logged, 1 transfer, 1 cash withdrawal/);
+  assert.equal(await txt(page,'#bankAdd'),'Nothing ticked');
+  /* the cafe now appears twice, so it becomes a one-tap button */
+  await page.locator('#quick [data-act=quick]',{hasText:'Corner Cafe · $4.00'}).click();
+  assert.match(await txt(page,'#weekCard'),/\$73\.00/);           // 140 - (42 + 4 + 6 + 11 + 4)
+  await loadBank(page,path.join(__dirname,'..','sample-plan.json'));
+  assert.match(await txt(page,'#bankResult'),/doesn't look like a bank activity file/);
+  assert.deepEqual(errors,[]);
+  await context.close();
+});
+
+test('paycheck plan: per-period budget, carry-over advice and a remembered checklist',async()=>{
+  const {page,context}=await open(env);
+  await importFile(page,SAMPLE);
+  await tab(page,'bills');
+  const card=()=>txt(page,'#paydayCard');
+  assert.match(await card(),/Next payday: Fri Oct 16/);
+  assert.match(await card(),/Oct 2 · now/);
+  assert.match(await card(),/Left over\s*\$780\.00/);
+  await page.click('#paydayCard [data-act=period][data-i="1"]');
+  assert.match(await card(),/Bills and rent \(4\)\s*−\$665\.00[\s\S]*Left over\s*\$215\.00/);
+  assert.match(await card(),/Pay rent half for Nov 1: \$400\.00/);
+  /* lower the paycheck so the Oct 16 period comes up short */
+  await tab(page,'settings');
+  await saveSection(page,'set-paycheck',{'paycheck.amount':800});
+  await tab(page,'bills');
+  await page.click('#paydayCard [data-act=period][data-i="0"]');
+  assert.match(await card(),/Keep \$185\.00 of this paycheck: the Oct 16 period is \$185\.00 short/);
+  await page.click('#paydayCard [data-act=period][data-i="1"]');
+  assert.match(await card(),/Short by\s*\$185\.00[\s\S]*Covered by the \$185\.00 kept from the Oct 2 paycheck/);
+  /* checklist ticks survive a reload */
+  await page.click('#paydayCard [data-act=period][data-i="0"]');
+  await page.locator('#paydayCard label',{hasText:'Move $40.00 to savings'}).locator('input').check();
+  await page.reload();
+  await tab(page,'bills');
+  assert.ok(await page.locator('#paydayCard label',{hasText:'Move $40.00 to savings'}).locator('input').isChecked());
+  await context.close();
+});
