@@ -136,15 +136,14 @@ function normSettings(ctx,s){
   }).filter(Boolean);
   hol=hol.filter(function(h,i){return hol.indexOf(h)===i;}).sort();
   return {
-    weeklyLimit:readNum(ctx,s,'weeklyLimit',W,{def:0,min:0,money:true,example:'175'}),
     weekStartsOn:WEEKDAYS[wIdx],
     warnBelow:readNum(ctx,s,'warnBelow',W,{def:0,money:true,example:'100'}),
     paycheck:{
+      /* your latest paycheck; upcoming ones are expected to be the same */
       amount:readNum(ctx,pay,'amount','settings.paycheck',{required:true,min:0,money:true,example:'1200',hint:'Add your take-home pay per paycheck, for example "amount": 1200.'}),
       knownPayday:readDate(ctx,pay,'knownPayday','settings.paycheck',{required:true}),
       everyDays:readNum(ctx,pay,'everyDays','settings.paycheck',{def:14,int:true,min:1,max:62,example:'14'})
     },
-    savingsPerPayday:readNum(ctx,s,'savingsPerPayday',W,{def:0,min:0,money:true,example:'50'}),
     rent:{
       amount:readNum(ctx,rent,'amount','settings.rent',{def:0,min:0,money:true,example:'800'}),
       dueDay:readNum(ctx,rent,'dueDay','settings.rent',{def:1,int:true,min:1,max:31,example:'1'}),
@@ -209,6 +208,19 @@ function normLedger(ctx,e,where){
     amount:readNum(ctx,e,'amount',where,{required:true,positive:true,money:true,example:'50'}),
     date:readDate(ctx,e,'date',where,{required:true}),
     note:readStr(ctx,e,'note',where,{def:'',max:120}),
+    ts:typeof e.ts==='number'?e.ts:0
+  };
+}
+function normSavings(ctx,e,where){
+  e=asObj(ctx,e,where,true);
+  var type=e.type==null?'deposit':String(e.type).trim().toLowerCase();
+  if(type!=='deposit'&&type!=='withdrawal'){ctx.errors.push(where+': "type" should be "deposit" (moved into savings) or "withdrawal" (taken out), but it is '+describe(e.type)+'.');type=undefined;}
+  return {
+    id:keepId(e.id),
+    type:type,
+    amount:readNum(ctx,e,'amount',where,{required:true,positive:true,money:true,example:'60'}),
+    date:readDate(ctx,e,'date',where,{required:true}),
+    note:readStr(ctx,e,'note',where,{def:'',max:60}),
     ts:typeof e.ts==='number'?e.ts:0
   };
 }
@@ -286,11 +298,17 @@ function normalizePlan(obj){
   var debts=asArr(ctx,obj.debts,'debts').map(function(d,i){return normDebt(ctx,d,'Debt '+(i+1)+nameOf(d));});
   var ledger=asArr(ctx,obj.partnerLedger,'partnerLedger').map(function(e,i){return normLedger(ctx,e,(settings.partner.label||'Partner')+' log entry '+(i+1));});
   var purchases=asArr(ctx,obj.purchases,'purchases').map(function(p,i){return normPurchase(ctx,p,'Purchase '+(i+1));});
+  var savingsLog=asArr(ctx,obj.savingsLog,'savingsLog').map(function(e,i){return normSavings(ctx,e,'Savings entry '+(i+1));});
   var paychecks=[],pdSeen={};
   asArr(ctx,obj.paychecks,'paychecks').forEach(function(r,i){
     var x=normPaycheck(ctx,r,'Paycheck '+(i+1));
     if(x.date&&pdSeen[x.date]){ctx.warnings.push('Two paychecks are dated '+x.date+'; only the last one was kept.');paychecks=paychecks.filter(function(y){return y.date!==x.date;});}
     pdSeen[x.date]=1;paychecks.push(x);
+  });
+  /* older files kept what was saved on the paycheck itself; it is now a savings entry on that payday */
+  paychecks.forEach(function(r){
+    if(r.movedToSavings>0)savingsLog.push({id:uid(),type:'deposit',amount:r.movedToSavings,date:r.date,note:'With paycheck',ts:0});
+    delete r.movedToSavings;
   });
   if(obj.bills===undefined)ctx.warnings.push('The file has no "bills" list, so it starts with no bills.');
 
@@ -304,13 +322,14 @@ function normalizePlan(obj){
   var t0=Date.now();
   ledger.forEach(function(e,i){if(!e.ts)e.ts=t0+i;});
   purchases.forEach(function(p,i){if(!p.ts)p.ts=t0+i;});
+  savingsLog.forEach(function(e,i){if(!e.ts)e.ts=t0+i;});
 
   if(ctx.errors.length){
     var errs=ctx.errors.slice(0,12);
     if(ctx.errors.length>12)errs.push('…and '+(ctx.errors.length-12)+' more problems.');
     return fail(errs,ctx.warnings);
   }
-  return {ok:true,errors:[],warnings:ctx.warnings,plan:{app:APP,version:VERSION,settings:settings,bills:bills,debts:debts,partnerLedger:ledger,purchases:purchases,paychecks:paychecks}};
+  return {ok:true,errors:[],warnings:ctx.warnings,plan:{app:APP,version:VERSION,settings:settings,bills:bills,debts:debts,partnerLedger:ledger,purchases:purchases,paychecks:paychecks,savingsLog:savingsLog}};
 }
 
 /* Same field order and optional-field rules as the documented format, so export → import → export is identical. */
@@ -320,9 +339,8 @@ function exportPlan(plan){
   var out={
     app:APP,version:VERSION,
     settings:{
-      weeklyLimit:s.weeklyLimit,weekStartsOn:s.weekStartsOn,warnBelow:s.warnBelow,
+      weekStartsOn:s.weekStartsOn,warnBelow:s.warnBelow,
       paycheck:{amount:s.paycheck.amount,knownPayday:s.paycheck.knownPayday,everyDays:s.paycheck.everyDays},
-      savingsPerPayday:s.savingsPerPayday,
       rent:{amount:s.rent.amount,dueDay:s.rent.dueDay,paidInHalvesOnLastTwoPaydaysBeforeDue:s.rent.paidInHalvesOnLastTwoPaydaysBeforeDue,
         extras:s.rent.extras.map(function(e){return {dueMonth:e.dueMonth,amount:e.amount,note:e.note};})},
       checking:{balance:s.checking.balance,asOf:s.checking.asOf},
@@ -345,11 +363,8 @@ function exportPlan(plan){
     purchases:plan.purchases.slice().sort(sortLog).map(function(p){return {amount:p.amount,note:p.note,category:p.category,date:p.date};})
   };
   /* optional: only written once you've recorded a paycheck, so older files round-trip unchanged */
-  if(plan.paychecks&&plan.paychecks.length)out.paychecks=plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).map(function(r){
-    var o={date:r.date,amount:r.amount};
-    if(r.movedToSavings!=null)o.movedToSavings=r.movedToSavings;
-    return o;
-  });
+  if(plan.paychecks&&plan.paychecks.length)out.paychecks=plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).map(function(r){return {date:r.date,amount:r.amount};});
+  if(plan.savingsLog&&plan.savingsLog.length)out.savingsLog=plan.savingsLog.slice().sort(sortLog).map(function(e){return {type:e.type,amount:e.amount,date:e.date,note:e.note};});
   return out;
 }
 
@@ -437,9 +452,9 @@ function weekData(plan,today){
     if(p.date===t0)todaySpent+=p.amount;
   });
   spent=round2(spent);
-  /* always from the pay periods, so it matches the Paycheck card even when no weekly target is set */
-  var lim=weekLimit(plan,w.ws,w.we);
-  return {ws:w.ws,we:w.we,spent:spent,today:round2(todaySpent),limit:lim,target:plan.settings.weeklyLimit,
+  /* each day's share of its paycheck's spending money, the same figure the Paycheck card shows */
+  var lim=weekLimit(plan,w.ws,w.we),cur=paycheckRecord(plan,ds(periodStart(plan,t)));
+  return {ws:w.ws,we:w.we,spent:spent,today:round2(todaySpent),limit:lim,estimated:!cur,
     left:round2(lim-spent),daysLeft:dayDiff(t,w.we)+1};
 }
 
@@ -453,6 +468,21 @@ function partnerData(plan,today){
     if(e.type==='payment'){if(!future)paid+=e.amount;}else charged+=e.amount;
   });
   return {bal:round2(bal),sched:round2(sched),total:round2(bal+sched),paid:round2(paid),charged:round2(charged),lastScheduled:lastSched};
+}
+/* ---------- savings ---------- */
+function savingsNet(plan,a,b){
+  return round2(plan.savingsLog.reduce(function(sum,e){return e.date>=a&&e.date<=b?sum+(e.type==='withdrawal'?-e.amount:e.amount):sum;},0));
+}
+/* the balance you entered in Settings, plus every move logged after its date (up to today) */
+function savingsData(plan,today){
+  var s=plan.settings.savings,t0=ds(sod(today)),bal=s.balance,moves=0;
+  plan.savingsLog.forEach(function(e){
+    if((!s.asOf||e.date>s.asOf)&&e.date<=t0){bal+=e.type==='withdrawal'?-e.amount:e.amount;moves++;}
+  });
+  return {balance:round2(bal),base:s.balance,asOf:s.asOf,moves:moves};
+}
+function partnerPaid(plan,a,b){
+  return round2(plan.partnerLedger.reduce(function(sum,e){return e.type==='payment'&&e.note!==ADJUSTMENT&&e.date>=a&&e.date<=b?sum+e.amount:sum;},0));
 }
 function monthsToRepay(total,per,today){
   var n=Math.ceil(total/per-1e-9),t=sod(today);
@@ -498,9 +528,12 @@ function cashProjection(plan,today,days){
   if(start>end)return null;
   var ev={},add=function(d,a){var k=ds(d);ev[k]=(ev[k]||0)+a;};
   var from=addDays(start,1);
-  periodsCovering(plan,from,end).forEach(function(p){if(p.start>=from&&p.start<=end)add(p.start,p.pay-p.savings);});
+  var a=s.checking.asOf,z=ds(end);
+  periodsCovering(plan,from,end).forEach(function(p){if(p.start>=from&&p.start<=end)add(p.start,p.pay);});
   billsBetween(plan,from,end).forEach(function(b){add(b.date,-b.amount);});
-  plan.purchases.forEach(function(p){if(p.date>s.checking.asOf&&p.date<=ds(end))add(pd(p.date),-p.amount);});
+  plan.purchases.forEach(function(p){if(p.date>a&&p.date<=z)add(pd(p.date),-p.amount);});
+  plan.savingsLog.forEach(function(e){if(e.date>a&&e.date<=z)add(pd(e.date),e.type==='withdrawal'?e.amount:-e.amount);});
+  plan.partnerLedger.forEach(function(e){if(e.type==='payment'&&e.note!==ADJUSTMENT&&e.date>a&&e.date<=z)add(pd(e.date),-e.amount);});
   var bal=s.checking.balance,now=null,low=null,lowDate=null;
   if(start>=t){now=bal;low=bal;lowDate=start;}
   for(var d=from;d<=end;d=addDays(d,1)){
@@ -515,64 +548,59 @@ function cashProjection(plan,today,days){
 
 /* ---------- per-paycheck plan ---------- */
 /* Each pay period runs from a payday to the day before the next one. A paycheck pays the bills due in its
-   period, may hold some back for a later period that would otherwise come up short, and the rest is
-   split between savings and spending. Until you say what you moved to savings, the suggestion is the usual
-   plan (weekly target for spending, the rest saved, at least the minimum saving) scaled to the real
-   paycheck, so a bigger check grows both and a smaller one shrinks both. Whatever isn't saved is spending. */
+   period. Each paycheck stands alone, except that if the next one can't cover its own bills, this one keeps
+   back the gap. What you move to savings and pay your partner during the period comes out next, and the
+   rest is spending money. Paychecks not entered yet are expected to match your latest one. */
 function periodStart(plan,d){var step=plan.settings.paycheck.everyDays;d=sod(d);return paydays(plan,addDays(d,-step+1),d)[0];}
 function paycheckRecord(plan,dateStr){
   for(var i=0;i<plan.paychecks.length;i++)if(plan.paychecks[i].date===dateStr)return plan.paychecks[i];
   return null;
 }
 function periodChain(plan,first,count,today){
-  var s=plan.settings,step=s.paycheck.everyDays,exp=s.paycheck.amount,minSave=s.savingsPerPayday;
-  var S=round2(s.weeklyLimit*step/7),t=today?sod(today):null,ps=[],i;
+  var s=plan.settings,step=s.paycheck.everyDays,exp=s.paycheck.amount,t=today?sod(today):null,ps=[],i;
   for(i=0;i<count;i++){
     var st=addDays(first,i*step),en=addDays(st,step-1),a=ds(st),b=ds(en),rec=paycheckRecord(plan,a);
-    var bills=billsBetween(plan,st,en).filter(function(x){return x.amount>0;});
+    var bills=billsBetween(plan,st,en).filter(function(x){return x.amount>0;}),byCat={},spent=0;
+    plan.purchases.forEach(function(p){if(p.date>=a&&p.date<=b){spent+=p.amount;byCat[p.category]=round2((byCat[p.category]||0)+p.amount);}});
     ps.push({start:st,end:en,expected:exp,rec:rec,recorded:!!rec,pay:rec?rec.amount:exp,bills:bills,
       billTotal:round2(bills.reduce(function(sum,x){return sum+x.amount;},0)),
-      spent:round2(plan.purchases.reduce(function(sum,p){return p.date>=a&&p.date<=b?sum+p.amount:sum;},0)),
-      current:!!t&&st<=t&&t<=en,carryIn:0,keepForNext:0,planSpending:S});
+      savings:savingsNet(plan,a,b),partner:partnerPaid(plan,a,b),spent:round2(spent),byCat:byCat,
+      current:!!t&&st<=t&&t<=en,carryIn:0,keepForNext:0});
   }
   for(i=0;i<ps.length;i++){
     var p=ps[i],n=ps[i+1];
-    var need=n?round2(n.billTotal+S+minSave-n.pay):0;
-    var freeFor=function(pay){
-      var avail=round2(pay+p.carryIn-p.billTotal),keep=need>0&&avail>0?Math.min(need,avail):0;
-      return {free:round2(avail-keep),keep:round2(keep)};
-    };
-    var e=freeFor(exp),act=freeFor(p.pay),sug;
-    p.keepForNext=act.keep;p.free=act.free;
-    if(n)n.carryIn=act.keep;
-    if(e.free>0)sug=act.free*Math.max(0,Math.min(S,e.free-minSave))/e.free;
-    else sug=Math.max(0,Math.min(S,act.free-minSave));
-    p.suggested=round2(Math.max(0,Math.min(sug,act.free)));
-    p.suggestedSavings=round2(Math.max(0,act.free-p.suggested));
-    p.saved=!!(p.rec&&p.rec.movedToSavings!=null);
-    p.savings=p.saved?p.rec.movedToSavings:p.suggestedSavings;
-    p.spending=p.saved?round2(Math.max(0,act.free-p.savings)):p.suggested;
-    p.short=act.free<0?round2(-act.free):0;
+    var need=n?round2(n.billTotal-n.pay):0,avail=round2(p.pay+p.carryIn-p.billTotal);
+    p.keepForNext=need>0&&avail>0?round2(Math.min(need,avail)):0;
+    if(n)n.carryIn=p.keepForNext;
+    p.free=round2(avail-p.keepForNext);          /* after bills: yours to save, pay back or spend */
+    p.short=p.free<0?round2(-p.free):0;
+    var rest=round2(p.free-p.savings-p.partner);
+    p.spending=Math.max(0,rest);                 /* spending money for the period */
+    p.overCommitted=rest<0&&p.free>=0?round2(-rest):0;   /* saved or paid back more than was left after bills */
+    p.left=round2(p.spending-p.spent);           /* negative once you've spent more than the spending money */
   }
   return ps;
-}
-/* After the payday or pay frequency changes, move each entered paycheck to the start of the new pay period
-   it falls in, so it isn't lost (and its savings isn't counted twice when entered again). Two that land in
-   the same period are added together. */
-function alignPaychecks(plan){
-  var by={},out=[];
-  plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).forEach(function(r){
-    var d=ds(periodStart(plan,pd(r.date))),x=by[d];
-    if(!x){x=by[d]={id:r.id,date:d,amount:r.amount,movedToSavings:r.movedToSavings};out.push(x);return;}
-    x.amount=round2(x.amount+r.amount);
-    if(r.movedToSavings!=null)x.movedToSavings=round2((x.movedToSavings||0)+r.movedToSavings);
-  });
-  return out;
 }
 /* the current period and the next count-1, with carry-over worked out from the period before */
 function payPeriods(plan,today,count){
   var step=plan.settings.paycheck.everyDays,cur=periodStart(plan,today);
   return periodChain(plan,addDays(cur,-step),count+2,today).slice(1,count+1); /* one before for carry-in, one after for look-ahead */
+}
+/* the current period and the count-1 before it, newest first */
+function pastPeriods(plan,today,count){
+  var step=plan.settings.paycheck.everyDays,cur=periodStart(plan,today);
+  return periodChain(plan,addDays(cur,-step*count),count+2,today).slice(1,count+1).reverse();
+}
+/* After the payday or pay frequency changes, move each entered paycheck to the start of the new pay period
+   it falls in, so it isn't lost. Two that land in the same period are added together. */
+function alignPaychecks(plan){
+  var by={},out=[];
+  plan.paychecks.slice().sort(function(a,b){return a.date<b.date?-1:1;}).forEach(function(r){
+    var d=ds(periodStart(plan,pd(r.date))),x=by[d];
+    if(!x){x=by[d]={id:r.id,date:d,amount:r.amount};out.push(x);return;}
+    x.amount=round2(x.amount+r.amount);
+  });
+  return out;
 }
 function periodsCovering(plan,from,to){
   var step=plan.settings.paycheck.everyDays,st=periodStart(plan,from);
@@ -750,10 +778,10 @@ return {
   APP:APP,VERSION:VERSION,ADJUSTMENT:ADJUSTMENT,KINDS:KINDS,WEEKDAYS:WEEKDAYS,
   ds:ds,pd:pd,sod:sod,addDays:addDays,dayDiff:dayDiff,round2:round2,isDateStr:isDateStr,isMonthStr:isMonthStr,uid:uid,clone:clone,money:money,
   Ctx:Ctx,parsePlan:parsePlan,normalizePlan:normalizePlan,exportPlan:exportPlan,
-  normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,
+  normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,normSavings:normSavings,
   paydays:paydays,billOccurrences:billOccurrences,rentOccurrences:rentOccurrences,billsBetween:billsBetween,totalBetween:totalBetween,
   weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection,
-  payPeriods:payPeriods,periodStart:periodStart,alignPaychecks:alignPaychecks,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
+  payPeriods:payPeriods,pastPeriods:pastPeriods,savingsData:savingsData,periodStart:periodStart,alignPaychecks:alignPaychecks,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
   matchBankTxns:matchBankTxns,frequentPurchases:frequentPurchases
 };
 });

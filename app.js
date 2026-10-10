@@ -18,11 +18,11 @@ var plural=function(n,one,many){return n+' '+(n===1?one:(many||one+'s'));};
 
 var KEY='money-plan:data:v1',TAB_KEY='money-plan:tab';
 var CATS=[['food','Food'],['gas','Gas'],['groceries','Groceries'],['shopping','Shopping'],['fun','Fun'],['other','Other']];
-var COLL={bill:'bills',debt:'debts',purchase:'purchases',ledger:'partnerLedger'};
+var COLL={bill:'bills',debt:'debts',purchase:'purchases',ledger:'partnerLedger',savings:'savingsLog'};
 var NORM={bill:C.normBill,debt:C.normDebt,purchase:C.normPurchase,ledger:C.normLedger};
 
 var plan=null,storageOK=true,loadError='';
-var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,saveTouched:false};
+var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false};
 var imp={result:null,confirming:false};
 
 /* ---------- storage: every call guarded ---------- */
@@ -162,17 +162,12 @@ function deepMerge(t,s){Object.keys(s).forEach(function(k){if(isObj(s[k])&&isObj
 function renderWeek(){
   var t=new Date(),w=C.weekData(plan,t),lim=w.limit,el=$('#weekCard');
   var range=esc(fMD.format(w.ws))+' to '+esc(fMD.format(w.we));
-  /* the limit comes from the pay periods (same as the Paycheck card), not straight from the Settings target */
-  if(!(lim>0)&&!(plan.settings.weeklyLimit>0)){
-    el.className='card';
-    el.innerHTML='<h2>Spent this week · '+range+'</h2><div class="big">'+money(w.spent)+'</div>'+
-      '<span class="status">No weekly spending target set. Add one in Settings.</span>';
-    return;
-  }
+  /* the limit is this week's share of the paycheck's spending money, the same figure the Paycheck card shows */
+  var est=w.estimated?' Estimated from your last paycheck until you enter this one.':'';
   if(!(lim>0)){
     el.className='card'+(w.spent>0?' state-bad':'');
     el.innerHTML='<h2>'+(w.spent>0?'Over by':'Left this week')+' · '+range+'</h2><div class="big">'+money(w.spent)+'</div>'+
-      '<span class="status'+(w.spent>0?' bad':'')+'">No spending money this week. After bills and savings, nothing is left from this paycheck. See the Paycheck card on Bills.</span>';
+      '<span class="status'+(w.spent>0?' bad':'')+'">No spending money this week. After bills, savings and payments, nothing is left from this paycheck. See the Paycheck card on Bills.'+est+'</span>';
     return;
   }
   var pct=w.spent/lim,expected=lim*(8-w.daysLeft)/7,state='',msg='';
@@ -186,7 +181,7 @@ function renderWeek(){
   el.innerHTML='<h2>'+(w.left<0?'Over by':'Left this week')+' · '+range+'</h2>'+
     '<div class="big">'+money(Math.abs(w.left))+'</div>'+
     '<div class="bar" role="img" aria-label="'+Math.round(Math.min(pct,1)*100)+' percent of the weekly limit spent"><i style="--w:'+Math.min(100,Math.round(pct*100))+'%"></i></div>'+
-    '<span class="status">'+esc(msg)+'</span>'+
+    '<span class="status">'+esc(msg+est)+'</span>'+
     '<div class="stats">'+
       '<div class="stat"><b>'+money(w.spent)+'</b><span>spent of '+money(lim)+'</span></div>'+
       '<div class="stat"><b>'+money(perDay)+'</b><span>per day, even pace</span></div>'+
@@ -241,82 +236,139 @@ function renderChips(){
 }
 
 /* ---------- Paycheck ---------- */
-/* On payday you enter two numbers: what you got paid and what you moved to savings.
-   Bills come out first; whatever isn't saved is spending money for the pay period. */
+/* On payday you enter what you got paid. Bills come out first; whatever you move to savings or pay your
+   partner during the pay period comes out next, and the rest is spending money. */
 function perWeek(amount){return money(amount*7/plan.settings.paycheck.everyDays);}
 function curPeriod(){return C.payPeriods(plan,new Date(),1)[0];}
-function payDone(p){return p.recorded&&p.saved;}
-/* the current period as it would look with these numbers, without saving anything */
-function payPreview(amount,saved){
+/* the current period as it would look with this paycheck, without saving anything */
+function payPreview(amount){
   var tmp=C.clone(plan),d=ds(curPeriod().start),r=C.paycheckRecord(tmp,d);
-  if(!r){r={id:'preview',date:d,amount:0,movedToSavings:null};tmp.paychecks.push(r);}
-  r.amount=amount;r.movedToSavings=saved;
+  if(!r){r={id:'preview',date:d,amount:0};tmp.paychecks.push(r);}
+  r.amount=amount;
   return C.payPeriods(tmp,new Date(),2);
 }
 function renderPayBanner(){
   var p=curPeriod();
-  $('#payBanner').innerHTML=payDone(p)?'':'<div class="banner pay"><span><b>Payday '+esc(wd(p.start))+'.</b> Enter your paycheck.</span>'+
+  $('#payBanner').innerHTML=p.recorded?'':'<div class="banner pay"><span><b>Payday '+esc(wd(p.start))+'.</b> Enter your paycheck.</span>'+
     '<button class="btn small" type="button" data-act="goto-pay">Enter</button></div>';
 }
 function paySummary(p,next,showEdit){
   var h='<div class="kv"><span>Paycheck'+(p.recorded?'':' (expected)')+(showEdit?' <button class="link" type="button" data-act="pay-edit">Edit</button>':'')+'</span><b class="in">+'+money(p.pay)+'</b></div>';
-  if(p.carryIn>0)h+='<div class="kv"><span>Held back from last paycheck</span><b class="in">+'+money(p.carryIn)+'</b></div>';
+  if(p.carryIn>0)h+='<div class="kv"><span>Kept back from last paycheck</span><b class="in">+'+money(p.carryIn)+'</b></div>';
   h+='<details class="sub"><summary><span>Bills before '+esc(fMD.format(next.start))+' ('+p.bills.length+')</span><b>−'+money(p.billTotal)+'</b></summary><ul class="list">'+
     p.bills.map(function(b){return '<li class="kv"><span>'+esc(fMD.format(b.date))+' · '+esc(b.name)+'</span><b>'+money(b.amount)+'</b></li>';}).join('')+'</ul></details>';
-  if(p.keepForNext>0)h+='<div class="kv"><span>Keep in checking for '+esc(fMD.format(next.start))+'\'s bills</span><b>−'+money(p.keepForNext)+'</b></div>';
-  if(p.savings>0)h+='<div class="kv"><span>'+(showEdit?'Moved to savings':'To savings')+'</span><b>−'+money(p.savings)+'</b></div>';
-  if(p.free<0)h+='<div class="kv total"><span>Short by</span><b>'+money(-p.free)+'</b></div><span class="status bad">This paycheck doesn\'t cover the bills before '+esc(fMD.format(next.start))+'. Use checking or savings for the gap.</span>';
-  else{
-    h+='<div class="kv total"><span>To spend · '+perWeek(p.spending)+' a week</span><b>'+money(p.spending)+'</b></div>';
-    if(p.saved&&p.savings>p.free+0.005)h+='<span class="status warn">You saved more than this paycheck has left after bills, so there\'s no spending money this period.</span>';
-  }
+  if(p.keepForNext>0)h+='<div class="kv"><span>Kept for '+esc(fMD.format(next.start))+'\'s bills (that paycheck can\'t cover them)</span><b>−'+money(p.keepForNext)+'</b></div>';
+  if(p.short>0)return h+'<div class="kv total"><span>Short by</span><b>'+money(p.short)+'</b></div><span class="status bad">This paycheck doesn\'t cover the bills before '+esc(fMD.format(next.start))+'. Use checking or savings for the gap.</span>';
+  if(p.savings>0)h+='<div class="kv"><span>Moved to savings</span><b>−'+money(p.savings)+'</b></div>';
+  if(p.savings<0)h+='<div class="kv"><span>Taken from savings</span><b class="in">+'+money(-p.savings)+'</b></div>';
+  if(p.partner>0)h+='<div class="kv"><span>Paid '+esc(label())+'</span><b>−'+money(p.partner)+'</b></div>';
+  h+='<div class="kv total"><span>To spend · '+perWeek(p.spending)+' a week</span><b>'+money(p.spending)+'</b></div>';
+  if(p.overCommitted>0)h+='<span class="status warn">You moved or paid '+money(p.overCommitted)+' more than this paycheck had left after bills, so there\'s no spending money this period.</span>';
+  else h+='<div class="kv"><span>Spent so far</span><b>'+money(p.spent)+'</b></div>'+
+    '<div class="kv"><span>'+(p.left<0?'Over by':'Left to spend')+'</span><b>'+money(Math.abs(p.left))+'</b></div>';
   return h;
 }
 function renderPlan(t){
-  var periods=C.payPeriods(plan,t,4),p=periods[0],next=periods[1],editing=!payDone(p)||ui.payEdit;
+  var periods=C.payPeriods(plan,t,4),p=periods[0],next=periods[1],editing=!p.recorded||ui.payEdit;
   var h='<div class="card" id="payCard"><h2>Paycheck</h2><p class="small"><b>'+esc(wd(p.start))+'</b> · covers '+esc(fMD.format(p.start))+' to '+esc(fMD.format(p.end))+'</p>';
   if(editing){
-    ui.saveTouched=p.saved;
     h+='<div class="paybox"><div class="row">'+
-      '<label class="fld"><span>You got paid</span><span class="money-in"><input id="payAmt" type="text" inputmode="decimal" placeholder="'+p.expected.toFixed(2)+'" value="'+(p.recorded?p.pay.toFixed(2):'')+'"></span></label>'+
-      '<label class="fld"><span>Moving to savings</span><span class="money-in"><input id="paySave" type="text" inputmode="decimal" value="'+p.savings.toFixed(2)+'"></span></label></div>'+
-      '<p class="muted small" style="margin-top:8px">Whatever you don\'t save is your spending money until '+esc(fMD.format(next.start))+'. Savings goes up by what you enter here.</p>'+
-      '<div class="btns" style="margin-top:10px">'+(payDone(p)?'<button class="btn small" type="button" data-act="pay-cancel">Cancel</button>':'')+
+      '<label class="fld"><span>You got paid</span><span class="money-in"><input id="payAmt" type="text" inputmode="decimal" placeholder="'+p.expected.toFixed(2)+'" value="'+(p.recorded?p.pay.toFixed(2):'')+'"></span></label></div>'+
+      '<p class="muted small" style="margin-top:8px">Bills come out first. Anything you move to savings or pay '+esc(label())+' comes out next, and the rest is your spending money until '+esc(fMD.format(next.start))+'.</p>'+
+      '<div class="btns" style="margin-top:10px">'+(p.recorded?'<button class="btn small" type="button" data-act="pay-cancel">Cancel</button>':'')+
       '<button class="btn primary" type="button" data-act="pay-save">Save</button></div></div>';
   }
   h+='<div id="paySummary">'+paySummary(p,next,!editing)+'</div>';
-  h+='<p class="small" style="margin-top:16px"><b>Next paychecks</b> <span class="muted">(expected '+money(p.expected)+')</span></p><ul class="list">'+periods.slice(1).map(function(q,i){
+  var nextNote=plan.paychecks.length?'expected '+money(p.expected)+', the same as your last paycheck':'expected '+money(p.expected);
+  h+='<p class="small" style="margin-top:16px"><b>Next paychecks</b> <span class="muted">('+esc(nextNote)+')</span></p><ul class="list">'+periods.slice(1).map(function(q,i){
     var n2=periods[i+2],bits=['Bills '+money(q.billTotal)];
     if(q.carryIn)bits.push('uses '+money(q.carryIn)+' kept back');
     if(q.keepForNext)bits.push('keeps '+money(q.keepForNext)+(n2?' for '+fMD.format(n2.start):''));
+    if(q.partner)bits.push(label()+' '+money(q.partner));
     if(q.short)bits.push('short '+money(q.short));
     return '<li class="item"><div><div class="t">'+esc(wd(q.start))+'</div><div class="s">'+esc(bits.join(' · '))+'</div></div>'+
       '<span class="a">'+perWeek(q.spending)+'</span><span class="s">a week</span></li>';
-  }).join('')+'</ul></div>';
+  }).join('')+'</ul><p class="muted small" style="margin-top:6px">Before anything you move to savings.</p></div>';
   $('#paydayCard').innerHTML=h;
+  renderHistory(t);
 }
-/* live preview while typing; savings follows the suggestion until you change it yourself */
-function payInput(e){
-  if(e.target.id==='paySave')ui.saveTouched=true;
-  var amt=parseAmount($('#payAmt').value)||curPeriod().expected;
-  var save=ui.saveTouched?(parseAmount($('#paySave').value,true)||0):null;
-  var ps=payPreview(amt,save);
-  if(!ui.saveTouched)$('#paySave').value=ps[0].savings.toFixed(2);
+/* live preview while typing */
+function payInput(){
+  var ps=payPreview(parseAmount($('#payAmt').value)||curPeriod().expected);
   $('#paySummary').innerHTML=paySummary(ps[0],ps[1],false);
 }
 function savePaycheck(){
-  var v=parseAmount($('#payAmt').value),sv=parseAmount($('#paySave').value,true);
+  var v=parseAmount($('#payAmt').value);
   if(!v){toast('Enter what you got paid, for example 1200.00.');$('#payAmt').focus();return;}
-  if(sv==null){toast('Enter what you moved to savings, or 0.');$('#paySave').focus();return;}
-  var date=ds(curPeriod().start),today0=ds(new Date());
-  var prev=C.paycheckRecord(plan,date),delta=round2(sv-(prev&&prev.movedToSavings||0));
+  var date=ds(curPeriod().start);
   ui.payEdit=false;
   commit(function(pl){
     var r=C.paycheckRecord(pl,date);
-    if(!r){r={id:C.uid(),date:date,amount:v,movedToSavings:null};pl.paychecks.push(r);}
-    r.amount=v;r.movedToSavings=sv;
-    if(delta){pl.settings.savings.balance=round2(pl.settings.savings.balance+delta);pl.settings.savings.asOf=today0;}
-  },'Paycheck saved.'+(delta?' Savings is now '+money(plan.settings.savings.balance+delta)+'.':''),true);
+    if(!r){r={id:C.uid(),date:date,amount:v};pl.paychecks.push(r);}
+    r.amount=v;
+    pl.settings.paycheck.amount=v;   /* upcoming paychecks are expected to match this one */
+  },'Paycheck saved.',true);
+}
+
+/* ---------- savings ---------- */
+function savingsAdd(type){
+  var amt=parseAmount($('#sAmt').value);
+  if(!amt){toast('Enter an amount greater than zero.');$('#sAmt').focus();return;}
+  var rec={id:C.uid(),type:type,amount:amt,date:$('#sDate').value||ds(new Date()),note:'',ts:Date.now()};
+  if(commit(function(p){p.savingsLog.push(rec);},(type==='deposit'?'Moved '+money(amt)+' to savings':'Took '+money(amt)+' out of savings'),true)){
+    $('#sAmt').value='';$('#sDate').value=ds(new Date());
+  }
+}
+function renderSavings(){
+  var sd=C.savingsData(plan,new Date());
+  $('#savBal').textContent=money(sd.balance);
+  $('#savNote').textContent=sd.asOf?'Your balance of '+money(sd.base)+' on '+fMD.format(pd(sd.asOf))+(sd.moves?', plus '+plural(sd.moves,'move')+' since then.':'. Moves you log after that date are added to it.'):'';
+  var list=plan.savingsLog.slice().sort(function(a,b){return (b.date>a.date?1:b.date<a.date?-1:0)||(b.ts-a.ts);});
+  $('#savLog').innerHTML=list.length?list.map(function(e){
+    var dep=e.type==='deposit';
+    return '<li class="item"><div><div class="t">'+esc(e.note||(dep?'Moved to savings':'Taken out of savings'))+'</div><div class="s">'+esc(dayLabel(e.date))+'</div></div>'+
+      '<span class="a'+(dep?' in':'')+'">'+(dep?'+':'−')+money(e.amount)+'</span>'+
+      '<span class="btns"><button class="btn small" type="button" data-act="del" data-kind="savings" data-id="'+esc(e.id)+'">Remove</button></span></li>';
+  }).join(''):'<li class="empty">Nothing moved yet.</li>';
+}
+
+/* ---------- where each paycheck went ---------- */
+/* fixed segment order and colours; spending is broken down by category in each paycheck's details */
+var SEG=['bills','partner','savings','spent'];
+function renderHistory(t){
+  var ps=C.pastPeriods(plan,t,6).filter(function(p){return p.recorded||p.current||p.spent>0;});
+  var el=$('#historyCard');
+  if(!ps.length){el.hidden=true;return;}
+  el.hidden=false;
+  var name={bills:'Bills',partner:'Paid '+label(),savings:'Savings',spent:'Spent',left:'Not spent'},max=0;
+  ps.forEach(function(p){
+    p.parts={bills:round2(p.billTotal+p.keepForNext),partner:p.partner,savings:Math.max(0,p.savings),spent:p.spent};
+    p.total=round2(p.pay+p.carryIn+Math.max(0,-p.savings));
+    p.out=round2(p.parts.bills+p.parts.partner+p.parts.savings+p.parts.spent);
+    p.rest=round2(p.total-p.out);
+    max=Math.max(max,p.total,p.out);
+  });
+  var sw=function(k){return '<i class="sw sw-'+k+'"></i>';};
+  var h='<h2>Where each paycheck went</h2><div class="legend">'+SEG.concat('left').map(function(k){return '<span>'+sw(k)+esc(name[k])+'</span>';}).join('')+'</div>';
+  h+=ps.map(function(p){
+    var keys=SEG.filter(function(k){return p.parts[k]>0;});
+    var segs=keys.map(function(k){return '<i class="seg sw-'+k+'" style="width:'+(p.parts[k]/max*100).toFixed(2)+'%"></i>';}).join('');
+    if(p.rest>0)segs+='<i class="seg sw-left" style="width:'+(p.rest/max*100).toFixed(2)+'%"></i>';
+    var rows=keys.map(function(k){
+      var r='<li class="kv"><span>'+sw(k)+esc(name[k])+(k==='bills'&&p.keepForNext?' (incl. '+money(p.keepForNext)+' kept for the next bills)':'')+'</span><b>'+money(p.parts[k])+'</b></li>';
+      if(k==='spent')r+=Object.keys(p.byCat).sort(function(a,b){return p.byCat[b]-p.byCat[a];}).map(function(c){
+        return '<li class="kv sub-kv"><span>'+esc(catLabel(c))+'</span><b>'+money(p.byCat[c])+'</b></li>';}).join('');
+      return r;
+    }).join('');
+    rows+=p.rest>=0?'<li class="kv"><span>'+sw('left')+(p.current?'Not spent yet':'Not spent')+'</span><b>'+money(p.rest)+'</b></li>':
+      '<li class="kv"><span>More went out than came in</span><b>'+money(-p.rest)+'</b></li>';
+    var aria=fMD.format(p.start)+' paycheck '+money(p.total)+': '+keys.map(function(k){return name[k]+' '+money(p.parts[k]);}).join(', ')+(p.rest>0?', not spent '+money(p.rest):'');
+    return '<details class="hist"><summary><div class="hist-head"><span>'+esc(fMD.format(p.start))+(p.current?' · now':'')+'</span><b>+'+money(p.total)+(p.recorded?'':' <span class="muted">expected</span>')+'</b></div>'+
+      '<div class="stack" role="img" aria-label="'+esc(aria)+'">'+segs+'</div></summary>'+
+      '<ul class="list">'+rows+'</ul></details>';
+  }).join('');
+  h+='<p class="muted small" style="margin-top:8px">Tap a paycheck to see the amounts. Spent is what you\'ve logged as purchases.</p>';
+  el.innerHTML=h;
 }
 
 /* ---------- quick add ---------- */
@@ -411,9 +463,8 @@ function renderBills(){
   renderPlan(t);
 
   /* balances and projection */
-  var p=C.cashProjection(plan,t,45),h='<h2>Accounts</h2>';
+  var p=C.cashProjection(plan,t,45),h='<h2>Checking</h2>';
   h+='<div class="kv"><span>Checking'+(s.checking.asOf?' on '+esc(fMD.format(pd(s.checking.asOf))):'')+'</span><b>'+money(s.checking.balance)+'</b></div>';
-  h+='<div class="kv"><span>Savings'+(s.savings.asOf?' on '+esc(fMD.format(pd(s.savings.asOf))):'')+'</span><b>'+money(s.savings.balance)+'</b></div>';
   if(p){
     if(s.checking.asOf<ds(t))h+='<div class="kv"><span>Checking today (estimate)</span><b>'+money(p.now)+'</b></div>';
     h+='<div class="kv"><span>Lowest point, next 45 days</span><b>'+money(p.low)+' · '+esc(fMD.format(p.lowDate))+'</b></div>';
@@ -549,12 +600,12 @@ function debtEditor(d){
 function renderSettings(){
   var s=plan.settings,L=label(),h='';
   h+=section('set-general','Spending',
-    '<div class="row">'+fMoney('Weekly spending target','weeklyLimit',s.weeklyLimit)+
-    fSelect('Week starts on','weekStartsOn',s.weekStartsOn,C.WEEKDAYS.map(function(d){return [d,cap(d)];}))+'</div>'+
-    '<div class="row">'+fMoney('Warn if checking could drop below','warnBelow',s.warnBelow)+fMoney('Save at least this each payday','savingsPerPayday',s.savingsPerPayday)+'</div>');
+    '<div class="row">'+fSelect('Week starts on','weekStartsOn',s.weekStartsOn,C.WEEKDAYS.map(function(d){return [d,cap(d)];}))+
+    fMoney('Warn if checking could drop below','warnBelow',s.warnBelow)+'</div>'+
+    '<p class="muted small" style="margin-top:10px">Your weekly spending money comes from each paycheck: what\'s left after bills, savings and payments to '+esc(L)+'.</p>');
   h+=section('set-paycheck','Paycheck',
-    '<div class="row">'+fMoney('Usual take-home per paycheck','paycheck.amount',s.paycheck.amount)+fText('Paid every (days)','paycheck.everyDays',s.paycheck.everyDays,{mode:'numeric'})+'</div>'+
-    '<div class="row">'+fDate('Any payday (past or future)','paycheck.knownPayday',s.paycheck.knownPayday)+'</div>');
+    '<div class="row">'+fText('Paid every (days)','paycheck.everyDays',s.paycheck.everyDays,{mode:'numeric'})+fDate('Any payday (past or future)','paycheck.knownPayday',s.paycheck.knownPayday)+'</div>'+
+    '<p class="muted small" style="margin-top:10px">Enter each paycheck on the Bills tab. Upcoming ones are expected to match your latest.</p>');
   h+=section('set-rent','Rent',
     '<div class="row">'+fMoney('Rent','rent.amount',s.rent.amount)+fText('Due day of month','rent.dueDay',s.rent.dueDay,{mode:'numeric'})+'</div>'+
     '<div class="row">'+fCheck('Pay it in two halves on the last two paydays before it\'s due','rent.paidInHalvesOnLastTwoPaydaysBeforeDue',s.rent.paidInHalvesOnLastTwoPaydaysBeforeDue)+'</div>'+
@@ -563,7 +614,8 @@ function renderSettings(){
     '<div class="row" style="margin-top:10px"><button class="btn small" type="button" data-act="add-row" data-tpl="extra">Add an extra amount</button></div>');
   h+=section('set-accounts','Balances',
     '<div class="row">'+fMoney('Checking balance','checking.balance',s.checking.balance)+fDate('As of','checking.asOf',s.checking.asOf)+'</div>'+
-    '<div class="row">'+fMoney('Savings balance','savings.balance',s.savings.balance)+fDate('As of','savings.asOf',s.savings.asOf)+'</div>');
+    '<div class="row">'+fMoney('Savings balance','savings.balance',s.savings.balance)+fDate('As of','savings.asOf',s.savings.asOf)+'</div>'+
+    '<p class="muted small" style="margin-top:10px">Money you move in or out of savings after this date is added on top. Log it on the Bills tab.</p>');
   h+=section('set-partner','Person you\'re repaying',
     '<div class="row">'+fText('Name shown in the app','partner.label',s.partner.label,{max:30})+fMoney('Monthly payment','partner.monthlyPayment',s.partner.monthlyPayment)+'</div>');
   h+=section('set-holidays','Bank holidays',
@@ -606,8 +658,6 @@ function summarize(p){
   var s=p.settings,t=new Date(),out=[];
   var np=C.paydays(p,t,addDays(t,s.paycheck.everyDays))[0];
   out.push('Paycheck: '+money(s.paycheck.amount)+' every '+s.paycheck.everyDays+' days'+(np?', next on '+wd(np):'')+'.');
-  out.push('Weekly spending limit: '+(s.weeklyLimit>0?money(s.weeklyLimit)+', weeks start on '+cap(s.weekStartsOn):'none set')+'.');
-  if(s.savingsPerPayday>0)out.push('Savings: move '+money(s.savingsPerPayday)+' each payday.');
   out.push(s.rent.amount>0?'Rent: '+money(s.rent.amount)+' due on the '+ordinal(s.rent.dueDay)+(s.rent.paidInHalvesOnLastTwoPaydaysBeforeDue?', paid in two halves':'')+(s.rent.extras.length?', with '+plural(s.rent.extras.length,'extra amount')+'.':'.'):'Rent: none.');
   var act=p.bills.filter(function(b){return b.active;});
   out.push('Bills: '+p.bills.length+(p.bills.length!==act.length?' ('+act.length+' active)':'')+', '+money(act.reduce(function(a,b){return a+b.amount;},0))+' a month in total.');
@@ -616,7 +666,8 @@ function summarize(p){
   out.push(s.partner.label+': '+plural(p.partnerLedger.length,'log entry','log entries')+(p.partnerLedger.length?', you owe '+money(pc.bal)+' now'+(pc.sched?' and '+money(pc.total)+' after scheduled entries':''):'')+'.');
   out.push('Purchases: '+p.purchases.length+'.');
   if(p.paychecks.length)out.push('Paychecks entered: '+p.paychecks.length+'.');
-  out.push('Checking '+money(s.checking.balance)+(s.checking.asOf?' (as of '+fMDY.format(pd(s.checking.asOf))+')':'')+', savings '+money(s.savings.balance)+(s.savings.asOf?' (as of '+fMDY.format(pd(s.savings.asOf))+')':'')+'.');
+  if(p.savingsLog.length)out.push('Savings moves: '+p.savingsLog.length+'.');
+  out.push('Checking '+money(s.checking.balance)+(s.checking.asOf?' (as of '+fMDY.format(pd(s.checking.asOf))+')':'')+', savings '+money(C.savingsData(p,t).balance)+'.');
   if(s.holidays.length)out.push('Bank holidays: '+s.holidays.length+'.');
   return out;
 }
@@ -692,7 +743,7 @@ function renderAll(){
   }
   $('#tab-welcome').hidden=true;
   $('#settingsImport').appendChild($('#importer'));
-  renderChips();renderQuick();renderPayBanner();renderWeek();renderCashWarn();renderRecent();renderBills();renderDebts();renderPartner();renderSettings();renderImport();
+  renderChips();renderQuick();renderPayBanner();renderWeek();renderCashWarn();renderRecent();renderBills();renderSavings();renderDebts();renderPartner();renderSettings();renderImport();
   showTab(ui.tab,true);
 }
 function showTab(name,keepScroll){
@@ -708,6 +759,7 @@ function setDefaultDates(){
   var d=ds(new Date());
   if(!$('#pDate').value)$('#pDate').value=d;
   if(!$('#cDate').value)$('#cDate').value=d;
+  if(!$('#sDate').value)$('#sDate').value=d;
 }
 
 /* ---------- record editing ---------- */
@@ -785,6 +837,8 @@ $('#cPaid').addEventListener('click',function(){
   parAdd('payment');
 });
 $('#cCharge').addEventListener('click',function(){parAdd('charge');});
+$('#sIn').addEventListener('click',function(){savingsAdd('deposit');});
+$('#sOut').addEventListener('click',function(){savingsAdd('withdrawal');});
 $('#saveSetBal').addEventListener('click',function(){
   var v=parseAmount($('#setBal').value,true);if(v==null){toast('Enter what you owe right now, for example 250.00.');return;}
   var cur=C.partnerData(plan,new Date()).bal,diff=round2(v-cur);
@@ -809,7 +863,7 @@ $('#impFile').addEventListener('change',function(){
 $('#bankFile').addEventListener('change',function(){var f=this.files&&this.files[0];if(f)readBankFile(f);});
 $('#bankResult').addEventListener('change',function(e){if(e.target.matches('[data-bank=pick]'))bankCount();});
 document.addEventListener('input',function(e){
-  if(e.target.id==='payAmt'||e.target.id==='paySave')payInput(e);
+  if(e.target.id==='payAmt')payInput();
 });
 
 /* one delegated handler for every data-act button */
@@ -881,7 +935,7 @@ document.addEventListener('click',function(e){
     case 'confirm-reset':
       if(!storageRemove(KEY)){toast('Couldn\'t delete the saved data. The browser blocked it.');return;}
       storageRemove(TAB_KEY);
-      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,saveTouched:false};bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
+      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false};bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
       renderAll();window.scrollTo(0,0);toast('Everything was deleted from this device.');
       break;
   }

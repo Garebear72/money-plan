@@ -93,6 +93,22 @@
   <!-- BILLS -->
   <section id="tab-bills" class="tab" aria-label="Bills" hidden>
     <div id="paydayCard"></div>
+    <form class="card" id="savCard" autocomplete="off">
+      <h2>Savings</h2>
+      <div class="big" id="savBal"></div>
+      <p class="muted small" id="savNote"></p>
+      <div class="row" style="margin-top:12px">
+        <label class="fld" style="flex-basis:120px"><span>Amount</span><span class="money-in"><input id="sAmt" type="text" inputmode="decimal" placeholder="0.00" aria-label="Amount in dollars"></span></label>
+        <label class="fld" style="flex-basis:152px"><span>Date</span><input id="sDate" type="date"></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" type="button" id="sIn" style="flex:1 1 140px">I moved this to savings</button>
+        <button class="btn" type="button" id="sOut" style="flex:1 1 140px">I took this out</button>
+      </div>
+      <p class="muted small" style="margin-top:10px">It comes out of (or goes back into) the spending money for that paycheck.</p>
+      <details class="sub" style="margin-top:10px"><summary><span>Savings history</span></summary><ul class="list" id="savLog"></ul></details>
+    </form>
+    <div class="card" id="historyCard" hidden></div>
     <div class="card" id="accountsCard"></div>
     <div class="card"><div id="billsList"></div></div>
     <p class="muted small">Weekend and holiday dates can post a business day later. <a href="#" data-act="goto" data-tab="settings" data-focus="set-bills">Edit bills in Settings.</a></p>

@@ -4,7 +4,7 @@ A small, installable budgeting app (PWA) that runs entirely on your phone.
 
 - **Private by design.** The app contains no financial data. You load your own plan file on your device, and it is saved only in that browser's local storage. The page's Content-Security-Policy blocks all network requests (`connect-src 'none'`). There are no third-party scripts, fonts or analytics.
 - **Works offline.** A service worker caches the app's own files. It never sees or stores your data.
-- **Everything is editable** after import: weekly limit, paycheck, rent and extras, bills, debts, balances, the partner log and purchases.
+- **Everything is editable** after import: paychecks, savings moves, rent and extras, bills, debts, balances, the partner log and purchases.
 
 ## Using it
 
@@ -19,9 +19,13 @@ Today → **Import purchases from your bank** reads a bank activity CSV on the d
 
 ## Paychecks
 
-On payday, the Bills tab asks two things: **what you got paid** and **what you're moving to savings**. Bills due before the next payday come out first, and whatever you don't save is your spending money for the pay period. Today's weekly limit follows from that, and a week that straddles a payday blends both paychecks.
+On payday, the Bills tab asks one thing: **what you got paid**. Each paycheck stands alone. Bills due before the next payday come out first. Anything you move to savings, and anything you pay your partner, during that pay period comes out next. The rest is your spending money, and Today's weekly limit is its share for the week. A week that straddles a payday blends both paychecks.
 
-The savings box starts with a suggestion: your weekly spending target scaled to the real paycheck, with at least your minimum saving. So a bigger check suggests more of both. If a later pay period is tight, some money is kept back in checking for its bills. Until you enter a paycheck, the app plans with your usual take-home amount and labels it "expected".
+The only time a paycheck holds money back is when the next one can't cover its own bills; then it keeps the gap. Upcoming paychecks are expected to match your latest one, and are labelled "expected" until you enter them.
+
+**Savings** has its own card on the Bills tab. Log money as you move it in or out, whenever that happens. The balance is your Settings balance plus every move logged after its date.
+
+**Where each paycheck went** shows one bar per paycheck: bills, partner payments, savings, what you spent, and what's not spent. Tap one for the amounts and spending by category.
 
 ## Plan file format
 
@@ -30,14 +34,15 @@ See [`sample-plan.json`](sample-plan.json) for a complete example. All numbers i
 | Key | Contents |
 | --- | --- |
 | `app`, `version` | `"money-plan"`, `1` |
-| `settings` | `weeklyLimit` (weekly spending target), `weekStartsOn`, `warnBelow` (warn if projected checking drops below this), `paycheck {amount, knownPayday, everyDays}` (your usual take-home pay and schedule), `savingsPerPayday` (minimum to save each payday), `rent {amount, dueDay, paidInHalvesOnLastTwoPaydaysBeforeDue, extras[{dueMonth, amount, note}]}`, `checking {balance, asOf}`, `savings {balance, asOf}`, `partner {label, monthlyPayment}`, `holidays[]` |
+| `settings` | `weekStartsOn`, `warnBelow` (warn if projected checking drops below this), `paycheck {amount, knownPayday, everyDays}` (your latest take-home pay, which upcoming paychecks are expected to match, and the schedule), `rent {amount, dueDay, paidInHalvesOnLastTwoPaydaysBeforeDue, extras[{dueMonth, amount, note}]}`, `checking {balance, asOf}`, `savings {balance, asOf}`, `partner {label, monthlyPayment}`, `holidays[]` |
 | `bills[]` | `name`, `amount`, `day`, `end` (date or `null`), `kind` (`subscription`, `debt`, `insurance` or `other`), `shiftToBusinessDay` (optional), `active` |
 | `debts[]` | `name`, `billName` (links to a bill), `balance`, `balanceAsOf`, `paymentsLeft`, `apr` (0.2 = 20%), `projectedPayoff`, `projectedPayoffWithExtra` (both optional, `"YYYY-MM"`), `note` |
 | `partnerLedger[]` | `type` (`charge` or `payment`), `amount`, `date`, `note` |
 | `purchases[]` | `amount`, `note`, `category`, `date` |
-| `paychecks[]` (optional) | `date` (the scheduled payday), `amount` received, `movedToSavings` |
+| `paychecks[]` (optional) | `date` (the scheduled payday), `amount` received |
+| `savingsLog[]` (optional) | `type` (`deposit` or `withdrawal`), `amount`, `date`, `note` |
 
-Dates are `YYYY-MM-DD`. Unknown fields are ignored, missing optional fields get defaults, and mistakes are reported in plain language with the item and field named.
+Dates are `YYYY-MM-DD`. Unknown fields are ignored (including `weeklyLimit` and `savingsPerPayday` from older files; an older paycheck's `movedToSavings` becomes a savings entry), missing optional fields get defaults, and mistakes are reported in plain language with the item and field named.
 
 How the schedule works:
 

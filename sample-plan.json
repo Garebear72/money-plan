@@ -2,11 +2,9 @@
   "app": "money-plan",
   "version": 1,
   "settings": {
-    "weeklyLimit": 140,
     "weekStartsOn": "monday",
     "warnBelow": 75,
     "paycheck": { "amount": 1200, "knownPayday": "2026-10-02", "everyDays": 14 },
-    "savingsPerPayday": 40,
     "rent": {
       "amount": 800,
       "dueDay": 1,
