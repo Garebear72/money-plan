@@ -16,13 +16,13 @@ var ordinal=function(n){var s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%1
 var isObj=function(v){return v!==null&&typeof v==='object'&&!Array.isArray(v);};
 var plural=function(n,one,many){return n+' '+(n===1?one:(many||one+'s'));};
 
-var KEY='money-plan:data:v1',TAB_KEY='money-plan:tab';
+var KEY='money-plan:data:v1',TAB_KEY='money-plan:tab',QUIET_KEY='money-plan:nothing-bought',BANK_KEY='money-plan:bank-file-to';
 var CATS=[['food','Food'],['gas','Gas'],['groceries','Groceries'],['shopping','Shopping'],['fun','Fun'],['other','Other']];
 var COLL={bill:'bills',debt:'debts',purchase:'purchases',ledger:'partnerLedger',savings:'savingsLog'};
 var NORM={bill:C.normBill,debt:C.normDebt,purchase:C.normPurchase,ledger:C.normLedger};
 
 var plan=null,storageOK=true,loadError='';
-var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false};
+var ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,nudgeHidden:false};
 var imp={result:null,confirming:false};
 
 /* ---------- storage: every call guarded ---------- */
@@ -371,6 +371,23 @@ function renderHistory(t){
   el.innerHTML=h;
 }
 
+/* ---------- daily reminder to log ---------- */
+/* A new day starts at 2am, so a late-night purchase still belongs to the day it happened. Until something is
+   logged for today, a reminder shows. Closing it hides it until the app is next opened; "I didn't buy
+   anything" clears it for the rest of the day (remembered on this device only). */
+function appToday(){return ds(sod(new Date(Date.now()-2*3600*1000)));}
+function renderNudge(){
+  var el=$('#logNudge'),d=appToday();
+  if(!plan||ui.nudgeHidden||storageGet(QUIET_KEY)===d||plan.purchases.some(function(p){return p.date===d;})){el.innerHTML='';return;}
+  var last=plan.purchases.reduce(function(m,p){return p.date<d&&p.date>m?p.date:m;},'');
+  var gap=last?dayDiff(pd(last),pd(d)):0;
+  el.innerHTML='<div class="nudge" role="alert"><button class="nudge-x" type="button" data-act="nudge-hide" aria-label="Hide until next time">×</button>'+
+    '<b>Log today\'s spending</b>'+
+    '<p>Nothing logged for '+esc(fFull.format(pd(d)))+' yet.'+(gap>1?' The last purchase you logged was '+esc(dayLabel(last))+'.':'')+'</p>'+
+    '<div class="btns"><button class="btn" type="button" data-act="nudge-none">I didn\'t buy anything</button>'+
+    '<button class="btn primary" type="button" data-act="nudge-add">Log a purchase</button></div></div>';
+}
+
 /* ---------- quick add ---------- */
 function renderQuick(){
   ui.quick=C.frequentPurchases(plan,new Date(),6);
@@ -389,7 +406,7 @@ function renderBank(){
   var el=$('#bankResult');
   if(bank.error){el.innerHTML='<span class="status bad" style="margin-top:12px">'+esc(bank.error)+'</span>';return;}
   if(!bank.rows){el.innerHTML='';return;}
-  if(!bank.rows.length){el.innerHTML='<span class="status" style="margin-top:12px">No money-out transactions in that file.</span>';return;}
+  if(!bank.rows.length){el.innerHTML='<span class="status" style="margin-top:12px">No purchases found (only money coming in).</span>';return;}
   var counts={};bank.rows.forEach(function(r){if(r.flag)counts[r.flag]=(counts[r.flag]||0)+1;});
   var why=[['bill','bill'],['logged','already logged','already logged'],['transfer','transfer'],['cash','cash withdrawal']].filter(function(x){return counts[x[0]];})
     .map(function(x){return plural(counts[x[0]],x[1],x[2]);});
@@ -428,28 +445,51 @@ function bankAdd(){
     recs.push({id:C.uid(),amount:r.txn.amount,note:note,category:li.querySelector('[data-bank=category]').value,date:r.txn.date,ts:t0+k});
   });
   if(!recs.length)return;
-  if(commit(function(p){p.purchases=p.purchases.concat(recs);},'Added '+plural(recs.length,'purchase')+' from your bank file',true)){
+  var from=bank.source==='texts'?'your texts':'your bank file',fileTo=bank.source==='file'?bank.to:'';
+  if(commit(function(p){p.purchases=p.purchases.concat(recs);},'Added '+plural(recs.length,'purchase')+' from '+from,true)){
+    if(fileTo&&fileTo>(storageGet(BANK_KEY)||''))storageSet(BANK_KEY,fileTo);
     bank={rows:null,error:'',range:''};
     try{$('#bankFile').value='';}catch(e){}
-    renderBank();
+    $('#smsText').value='';
+    renderBank();renderBankLast();
     $('#bankCard').open=false;
   }
+}
+/* show what was read from a bank file or from pasted texts, ready to review */
+function showBankTxns(res,source){
+  if(!res.ok){bank.error=res.errors[0];renderBank();return;}
+  bank.rows=C.matchBankTxns(plan,res.txns);bank.source=source;
+  var dates=res.txns.map(function(x){return x.date;}).sort();
+  bank.to=dates[dates.length-1];
+  bank.range=dates[0]===bank.to?'on '+fMD.format(pd(bank.to)):'from '+fMD.format(pd(dates[0]))+' to '+fMD.format(pd(bank.to));
+  renderBank();
 }
 function readBankFile(f){
   bank={rows:null,error:'',range:''};
   renderBank();
   if(f.size>5*1024*1024){bank.error='That file is too big for a bank activity export. Choose a shorter date range.';renderBank();return;}
   var r=new FileReader();
-  r.onload=function(){
-    var res=C.readBankCsv(String(r.result||''));
-    if(!res.ok){bank.error=res.errors[0];renderBank();return;}
-    bank.rows=C.matchBankTxns(plan,res.txns);
-    var dates=res.txns.map(function(x){return x.date;}).sort();
-    bank.range=dates.length?'from '+fMD.format(pd(dates[0]))+' to '+fMD.format(pd(dates[dates.length-1])):'';
-    renderBank();
-  };
+  r.onload=function(){showBankTxns(C.readBankCsv(String(r.result||'')),'file');};
   r.onerror=function(){bank.error='Couldn\'t read that file. Try choosing it again.';renderBank();};
   r.readAsText(f);
+}
+function readTexts(){
+  bank={rows:null,error:'',range:''};
+  showBankTxns(C.readTextAlerts($('#smsText').value,new Date()),'texts');
+}
+/* the bank file only needs to start where the last one ended */
+function renderBankLast(){
+  var to=storageGet(BANK_KEY);
+  $('#bankLast').textContent=to?'Your last bank file went up to '+wd(pd(to))+'. Next time, download from '+fMD.format(pd(to))+' to today.':'';
+}
+/* text shared to the app from another app (Android's Share menu) lands in the texts box */
+function takeShared(){
+  var q=new URLSearchParams(location.search),txt=[q.get('share_title'),q.get('share_text')].filter(Boolean).join('\n');
+  if(!q.has('share_text')&&!q.has('share_title'))return;
+  try{history.replaceState(null,'',location.pathname);}catch(e){}   /* don't keep the message in the address or history */
+  if(!plan||!txt.trim())return;
+  showTab('today');$('#bankCard').open=true;$('#smsText').value=txt;readTexts();
+  $('#bankCard').scrollIntoView({block:'start'});
 }
 
 /* ---------- Bills ---------- */
@@ -727,6 +767,7 @@ var TABS=['today','bills','debts','partner','settings'];
 function renderAll(){
   $('#today').textContent=fFull.format(new Date());
   var has=!!plan,sync=$('#sync');
+  renderNudge();
   sync.textContent=has?'Saved on this device':'No plan yet';
   sync.classList.toggle('ok',has);
   document.querySelector('.nav').hidden=!has;
@@ -743,7 +784,7 @@ function renderAll(){
   }
   $('#tab-welcome').hidden=true;
   $('#settingsImport').appendChild($('#importer'));
-  renderChips();renderQuick();renderPayBanner();renderWeek();renderCashWarn();renderRecent();renderBills();renderSavings();renderDebts();renderPartner();renderSettings();renderImport();
+  renderChips();renderQuick();renderPayBanner();renderWeek();renderCashWarn();renderRecent();renderBills();renderSavings();renderBankLast();renderDebts();renderPartner();renderSettings();renderImport();
   showTab(ui.tab,true);
 }
 function showTab(name,keepScroll){
@@ -861,6 +902,7 @@ $('#impFile').addEventListener('change',function(){
 });
 
 $('#bankFile').addEventListener('change',function(){var f=this.files&&this.files[0];if(f)readBankFile(f);});
+$('#smsRead').addEventListener('click',readTexts);
 $('#bankResult').addEventListener('change',function(e){if(e.target.matches('[data-bank=pick]'))bankCount();});
 document.addEventListener('input',function(e){
   if(e.target.id==='payAmt')payInput();
@@ -905,12 +947,19 @@ document.addEventListener('click',function(e){
       var pa=$('#payAmt');if(pa){pa.scrollIntoView({block:'center'});pa.focus({preventScroll:true});}
       break;
     case 'pay-save':savePaycheck();break;
+    case 'nudge-hide':ui.nudgeHidden=true;renderNudge();break;
+    case 'nudge-none':
+      storageSet(QUIET_KEY,appToday());renderNudge();toast('Got it. Nothing to log today.');break;
+    case 'nudge-add':
+      showTab('today');$('#pDate').value=appToday();
+      $('#addForm').scrollIntoView({block:'start'});$('#pAmt').focus({preventScroll:true});
+      break;
     case 'pay-edit':ui.payEdit=true;renderPlan(sod(new Date()));if($('#payAmt'))$('#payAmt').focus();break;
     case 'pay-cancel':ui.payEdit=false;renderPlan(sod(new Date()));break;
     case 'bank-all':case 'bank-none':
       document.querySelectorAll('#bankResult [data-bank=pick]').forEach(function(c){c.checked=act==='bank-all';});bankCount();break;
     case 'bank-add':bankAdd();break;
-    case 'bank-cancel':bank={rows:null,error:'',range:''};try{$('#bankFile').value='';}catch(err){}renderBank();break;
+    case 'bank-cancel':bank={rows:null,error:'',range:''};try{$('#bankFile').value='';}catch(err){}$('#smsText').value='';renderBank();break;
     case 'save-sec':saveSection(b.getAttribute('data-sec'));break;
     case 'add-row':
       var box=b.closest('[data-sec]').querySelector('[data-rows]');
@@ -934,8 +983,8 @@ document.addEventListener('click',function(e){
     case 'cancel-reset':ui.confirmReset=false;renderResetConfirm();break;
     case 'confirm-reset':
       if(!storageRemove(KEY)){toast('Couldn\'t delete the saved data. The browser blocked it.');return;}
-      storageRemove(TAB_KEY);
-      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false};bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
+      storageRemove(TAB_KEY);storageRemove(QUIET_KEY);storageRemove(BANK_KEY);
+      plan=null;ui={tab:'today',editing:null,selCat:'other',showAll:false,confirmReset:false,quick:[],payEdit:false,nudgeHidden:false};bank={rows:null,error:'',range:''};imp={result:null,confirming:false};
       renderAll();window.scrollTo(0,0);toast('Everything was deleted from this device.');
       break;
   }
@@ -946,7 +995,8 @@ document.querySelector('.nav').addEventListener('click',function(e){
 document.addEventListener('visibilitychange',function(){
   if(document.hidden)return;
   setDefaultDates();
-  if(plan&&!ui.editing&&!isTyping())renderAll();
+  ui.nudgeHidden=false;   /* a closed reminder comes back each time the app is opened */
+  if(plan&&!ui.editing&&!isTyping())renderAll();else renderNudge();
 });
 window.addEventListener('storage',function(e){
   if(e.key!==KEY)return;
@@ -960,6 +1010,7 @@ storageRemove('money-plan:checklist'); /* left by an earlier version */
 ui.tab=storageGet(TAB_KEY)||'today';
 setDefaultDates();
 renderAll();
+takeShared();
 if(plan)requestPersist();
 
 if('serviceWorker' in navigator){

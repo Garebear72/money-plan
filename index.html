@@ -32,6 +32,7 @@
     <span class="pill" id="sync">Loading</span>
   </header>
   <div class="banner" id="banner" hidden></div>
+  <div id="logNudge"></div>
   <noscript><div class="banner">Money Plan needs JavaScript turned on.</div></noscript>
 
   <!-- FIRST RUN: shown until a plan is imported -->
@@ -71,8 +72,12 @@
     </form>
 
     <details class="card" id="bankCard">
-      <summary>Import purchases from your bank</summary>
-      <p class="small">Add many purchases at once from your bank's activity file (CSV). The file is read on this device and never uploaded.</p>
+      <summary>Add purchases from Chase texts or your bank</summary>
+      <p class="small"><b>From your Chase texts.</b> In Messages, long-press a purchase alert, tap <b>Copy</b>, and paste it below. You can paste several, one after another. If Money Plan shows up when you tap <b>Share</b> on a text, that works too.</p>
+      <label class="fld wide" style="margin-top:10px"><span>Chase text alerts</span><textarea id="smsText" rows="4" spellcheck="false" autocomplete="off" placeholder="You made a $12.75 transaction with …"></textarea></label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" type="button" id="smsRead" style="flex:1 1 140px">Read texts</button></div>
+      <p class="small" style="margin-top:18px"><b>From your bank's activity file (CSV).</b> Good for catching up on a week or more. The file is read on this device and never uploaded.</p>
+      <p class="small" id="bankLast" style="margin-top:6px;font-weight:600"></p>
       <ol class="steps small">
         <li>On <b>chase.com</b> in a web browser (the Chase app can't export), open your checking account and tap the <b>download</b> icon above your transactions. If the site keeps sending you to the app, turn on <b>Desktop site</b> in the browser menu.</li>
         <li>Pick a date range, choose <b>CSV</b>, and download.</li>

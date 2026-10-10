@@ -13,9 +13,17 @@ A small, installable budgeting app (PWA) that runs entirely on your phone.
 3. Log purchases by hand, with one tap for ones you repeat, or import them in bulk from your bank (see below).
 4. Back up any time from **Settings → Export plan file** (or **Copy as text**). Importing that file restores everything exactly.
 
+## Remembering to log
+
+Until something is logged for today, a reminder shows at the top of the app (a new day starts at 2am). Closing it hides it until the app is next opened. **I didn't buy anything** clears it for the rest of the day.
+
+## Purchases from Chase text alerts
+
+Today → **Add purchases from Chase texts or your bank**. Copy one or more purchase alerts from Messages and paste them in, or share a text to Money Plan if your browser lists it in the Share menu. Each alert's amount, shop and date are read on the device and shown in the same review list as a bank file. Refunds and deposits are skipped, and Zelle payments are left unticked.
+
 ## Importing purchases from your bank
 
-Today → **Import purchases from your bank** reads a bank activity CSV on the device. Nothing is uploaded. It works with Chase checking and card exports, and with most banks whose file has date, description and amount (or debit/credit) columns. Each money-out row is shown with a cleaned-up name and a guessed category. It's left unticked if it matches a bill, a purchase you've already logged (same amount within 3 days), a transfer or Zelle payment, or a cash withdrawal. Re-importing an overlapping date range doesn't create duplicates.
+Today → **Import purchases from your bank** reads a bank activity CSV on the device. Nothing is uploaded. It works with Chase checking and card exports, and with most banks whose file has date, description and amount (or debit/credit) columns. Each money-out row is shown with a cleaned-up name and a guessed category. It's left unticked if it matches a bill, a purchase you've already logged (same amount within 3 days), a transfer or Zelle payment, or a cash withdrawal. Re-importing an overlapping date range doesn't create duplicates. The app remembers where your last file ended, so you know which dates to download next.
 
 ## Paychecks
 

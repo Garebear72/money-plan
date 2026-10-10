@@ -265,3 +265,27 @@ test('changing the payday keeps an entered paycheck with its new pay period',()=
   q.settings.paycheck.everyDays=56;
   assert.deepEqual(C.alignPaychecks(q).map(r=>[r.date,r.amount]),[['2026-10-02',2450]]);
 });
+
+/* ---------- purchase alerts from text messages (made-up merchants) ---------- */
+const ALERTS=[
+  'Chase: You made a $12.75 transaction with CORNER CAFE on Oct 6, 2026 at 8:20 PM ET.',
+  'Chase Freedom: You made a $1,040.00 transaction with BIG STORE #123 on Oct 5, 2026 at 1:02 PM ET. Chase: You made a $3.25 transaction with TINY SHOP on Oct 5, 2026 at 1:05 PM ET.',
+  'You made a $6.00 debit card transaction with SQ *MAPLE BAKERY on Oct 7 at 9:01 AM ET.',
+  'Not you? Call the number on your card.',
+  'A $36.25 debit card transaction to GAS N GO on 10/04/2026 exceeded your $0.00 set Alert limit.',
+  'Chase: A $20.00 refund from BIG STORE was credited on Oct 6.',
+  'You sent $45.00 to Jamie Example with Zelle on Oct 6.',
+  'Chase: You made a $16.00 transaction with LATE SHOP on Dec 30 at 8:00 PM ET.'
+].join('\n');
+test('reads purchase alerts copied from texts, skipping money coming in',()=>{
+  const r=C.readTextAlerts(ALERTS,D('2026-10-07'));
+  assert.ok(r.ok);assert.equal(r.skippedRows,1);   // the refund
+  assert.deepEqual(r.txns.map(t=>[t.date,t.amount,C.cleanMerchant(t.desc)]),[
+    ['2026-10-06',12.75,'Corner Cafe'],['2026-10-05',1040,'Big Store'],['2026-10-05',3.25,'Tiny Shop'],
+    ['2026-10-07',6,'Maple Bakery'],['2026-10-04',36.25,'Gas N Go'],['2026-10-06',45,'Jamie Example'],
+    ['2025-12-30',16,'Late Shop']]);   // no year and after today: last December
+  const rows=C.matchBankTxns(plan(),r.txns);
+  assert.equal(rows.find(x=>x.txn.desc==='Jamie Example').flag,'transfer');
+  assert.match(C.readTextAlerts('hello there',D('2026-10-07')).errors[0],/no amount/);
+  assert.match(C.readTextAlerts('You paid $5',D('2026-10-07')).errors[0],/Couldn't read a purchase/);
+});

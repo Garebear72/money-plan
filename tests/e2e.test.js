@@ -292,3 +292,60 @@ test('every line on a card agrees with its headline',async()=>{
   assert.deepEqual(errors,[]);
   await context.close();
 });
+
+test('daily reminder: shows until something is logged today, closes until next open, and "nothing bought" clears it',async()=>{
+  let {page,context,errors}=await open(env);   // Wed Oct 7, noon: the sample has nothing logged today
+  await importFile(page,SAMPLE);
+  const nudge=()=>txt(page,'#logNudge');
+  assert.match(await nudge(),/Log today's spending\s*Nothing logged for Wednesday, October 7 yet\./);
+  assert.doesNotMatch(await nudge(),/last purchase/);   // yesterday has one
+  await page.click('[data-act=nudge-hide]');
+  assert.equal(await nudge(),'');
+  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));   // app opened again
+  assert.match(await nudge(),/Log today's spending/);
+  await page.click('[data-act=nudge-add]');
+  assert.equal(await page.inputValue('#pDate'),'2026-10-07');
+  await page.fill('#pAmt','4.25');await page.click('#addForm [type=submit]');
+  assert.equal(await nudge(),'');
+  assert.deepEqual(errors,[]);
+  await context.close();
+
+  /* 1:30am still counts as the day before; a few quiet days mention the last purchase */
+  ({page,context,errors}=await open(env,{time:'2026-10-10T01:30:00'}));
+  await importFile(page,SAMPLE);
+  assert.match(await nudge(),/Nothing logged for Friday, October 9 yet\. The last purchase you logged was Tue Oct 6\./);
+  await page.click('[data-act=nudge-none]');
+  assert.equal(await nudge(),'');
+  await page.reload();
+  assert.equal(await nudge(),'');
+  assert.deepEqual(errors,[]);
+  await context.close();
+});
+
+test('purchases from pasted or shared Chase texts, and the bank file remembers where it ended',async()=>{
+  let {page,context,errors}=await open(env);
+  await importFile(page,SAMPLE);
+  await page.click('#bankCard summary');
+  await page.fill('#smsText',['Chase: You made a $7.25 transaction with CORNER CAFE on Oct 7, 2026 at 8:20 AM ET.',
+    'You made a $30.00 debit card transaction with FUEL STOP on Oct 6 at 5:00 PM ET.',
+    'Chase: A $9.00 refund from BIG STORE was credited on Oct 6.'].join('\n'));
+  await page.click('#smsRead');
+  assert.match(await txt(page,'#bankResult'),/Found 2 payments from Oct 6 to Oct 7\. Left unticked: 1 already logged/);
+  assert.equal(await txt(page,'#bankAdd'),'Add 1 purchase ($7.25)');
+  await page.click('#bankAdd');
+  assert.match(await txt(page,'#recent'),/Corner Cafe[\s\S]*\$7\.25/);
+  assert.equal(await page.inputValue('#smsText'),'');
+  /* a CSV import remembers the last date it covered */
+  await page.click('#bankCard summary');
+  await loadBank(page,CSV);
+  await page.click('#bankAdd');
+  await page.click('#bankCard summary');
+  assert.match(await txt(page,'#bankLast'),/Your last bank file went up to Wed Oct 7\. Next time, download from Oct 7 to today\./);
+  /* a text shared from Messages opens straight into the review list, and leaves nothing in the address */
+  await page.goto(env.url+'?share_text='+encodeURIComponent('Chase: You made a $8.75 transaction with TINY SHOP on Oct 7, 2026 at 1:00 PM ET.'));
+  assert.match(await txt(page,'#bankResult'),/Found 1 payment on Oct 7/);
+  assert.equal(await page.inputValue('#smsText'),'Chase: You made a $8.75 transaction with TINY SHOP on Oct 7, 2026 at 1:00 PM ET.');
+  assert.equal(new URL(page.url()).search,'');
+  assert.deepEqual(errors,[]);
+  await context.close();
+});

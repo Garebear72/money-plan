@@ -683,6 +683,53 @@ function readBankCsv(text){
   return {ok:true,txns:txns,skippedRows:bad};
 }
 
+/* ---------- purchase alerts copied from text messages ---------- */
+var MONTHS=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+/* "Oct 9, 2026", "Oct 9" or "10/09/2026", "10/09"; a date with no year is the most recent one not after today */
+function alertDate(s,today){
+  var m,t=sod(today),d=null,year=null;
+  if((m=/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s*(\d{4}))?/.exec(s))){
+    var mi=MONTHS.indexOf(m[1].toLowerCase());if(mi<0)return null;
+    year=m[3]?+m[3]:null;d=new Date(year||t.getFullYear(),mi,+m[2]);
+  }else if((m=/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(s))){
+    year=m[3]?(+m[3]<100?2000+ +m[3]:+m[3]):null;d=new Date(year||t.getFullYear(),m[1]-1,+m[2]);
+  }
+  if(!d)return null;
+  if(!year&&d>t)d=new Date(d.getFullYear()-1,d.getMonth(),d.getDate());
+  return d;
+}
+/* Reads one or more card alerts, such as Chase's "You made a $12.75 transaction with CORNER CAFE on Oct 9, 2026
+   at 8:20 PM ET." Money coming in (refunds, deposits, credits) is skipped. Returns the same shape as readBankCsv. */
+function readTextAlerts(text,today){
+  var t=sod(today||new Date()),txns=[],skipped=0,seen=0;
+  /* one alert per line; a line with no amount continues the one before it */
+  var parts=[];
+  String(text||'').replace(/\r/g,'').split('\n').forEach(function(line){
+    line.split(/(?=\bChase\b[^:]{0,40}:\s)/).forEach(function(bit){
+      if(!bit.trim())return;
+      if(parts.length&&!/\$\s?\d/.test(bit))parts[parts.length-1]+=' '+bit;else parts.push(bit);
+    });
+  });
+  parts.forEach(function(raw){
+    var msg=raw.replace(/\s+/g,' ').trim();
+    var am=/\$\s?([\d,]+(?:\.\d{1,2})?)/.exec(msg);
+    if(!am)return;
+    seen++;
+    if(/\b(refund(?:ed)?|deposit(?:ed)?|credited|received|returned|reversal|sent you)\b/i.test(msg)){skipped++;return;}   /* money in */
+    var amount=round2(parseFloat(am[1].replace(/,/g,'')));
+    var after=msg.slice(am.index+am[0].length);
+    var who=/\b(?:with|to|at)\s+(.+?)(?=\s+(?:on|was|has|exceeded|using|for)\b|[.;]\s|[.;]?$)/i.exec(after);
+    var dm=/\bon\s+((?:[A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s*\d{4})?)|(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?))/i.exec(after);
+    var date=dm?alertDate(dm[1],t):t;
+    if(!(amount>0)||!who||!date){skipped++;return;}
+    var desc=who[1].replace(/\s+(?:with|via)\s+zelle\b.*$/i,'').trim().replace(/\s+/g,' ');
+    var transfer=/zelle|you sent|transfer/i.test(msg);   /* left unticked as a transfer */
+    txns.push({date:ds(date),posted:ds(date),desc:desc,amount:amount,out:true,type:transfer?'transfer':''});
+  });
+  if(!txns.length)return {ok:false,errors:[seen?'Couldn\'t read a purchase from '+(seen===1?'that text':'those texts')+'. Copy the whole alert, from "You made a $…" to the date.':'There\'s no amount in that text. Copy a whole purchase alert, for example "You made a $12.75 transaction with Corner Cafe on Oct 9".']};
+  return {ok:true,txns:txns,skippedRows:skipped};
+}
+
 var STATES='AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'.split(' ');
 function titleCase(s){return s.toLowerCase().replace(/(^|[\s\-\/&])([a-z])/g,function(m,a,b){return a+b.toUpperCase();});}
 /* "POS DEBIT CORNER CAFE LLC SPRINGFIELD IL 10/05" -> "Corner Cafe" */
@@ -781,7 +828,7 @@ return {
   normSettings:normSettings,normBill:normBill,normDebt:normDebt,normLedger:normLedger,normPurchase:normPurchase,normExtra:normExtra,normPaycheck:normPaycheck,normSavings:normSavings,
   paydays:paydays,billOccurrences:billOccurrences,rentOccurrences:rentOccurrences,billsBetween:billsBetween,totalBetween:totalBetween,
   weekWindow:weekWindow,weekData:weekData,partnerData:partnerData,monthsToRepay:monthsToRepay,findBill:findBill,debtInfo:debtInfo,cashProjection:cashProjection,
-  payPeriods:payPeriods,pastPeriods:pastPeriods,savingsData:savingsData,periodStart:periodStart,alignPaychecks:alignPaychecks,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
+  payPeriods:payPeriods,pastPeriods:pastPeriods,savingsData:savingsData,periodStart:periodStart,alignPaychecks:alignPaychecks,periodsCovering:periodsCovering,weekLimit:weekLimit,paycheckRecord:paycheckRecord,parseCSV:parseCSV,readBankCsv:readBankCsv,readTextAlerts:readTextAlerts,cleanMerchant:cleanMerchant,guessCategory:guessCategory,
   matchBankTxns:matchBankTxns,frequentPurchases:frequentPurchases
 };
 });
